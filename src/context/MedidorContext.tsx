@@ -13,6 +13,7 @@ interface MedidorContextType {
   removeMeasurement: (imageId: string, lineId: string) => void;
   clearAllMeasurements: () => void;
   getCurrentImage: () => LoadedImage | undefined;
+  setImages: React.Dispatch<React.SetStateAction<LoadedImage[]>>;
 }
 
 const MedidorContext = createContext<MedidorContextType | undefined>(undefined);
@@ -123,6 +124,7 @@ export const MedidorProvider: React.FC<{ children: React.ReactNode }> = ({ child
     removeMeasurement,
     clearAllMeasurements,
     getCurrentImage,
+    setImages,
   };
 
   return (

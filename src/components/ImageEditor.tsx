@@ -16,7 +16,7 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
   onCalibrationComplete,
   calibrationUnit 
 }) => {
-  const { getCurrentImage, addMeasurement, updateCalibration } = useMedidor();
+  const { getCurrentImage, addMeasurement, updateCalibration, images, setImages } = useMedidor();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const histogramCanvasRef = useRef<HTMLCanvasElement>(null);
   const thresholdCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -24,6 +24,8 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
   const [isDrawing, setIsDrawing] = useState(false);
   const [currentPoints, setCurrentPoints] = useState<DrawingPoint[]>([]);
   const [isDetecting, setIsDetecting] = useState(false);
+  const [hoveredEndpoint, setHoveredEndpoint] = useState<{ measurementId: string; isStart: boolean } | null>(null);
+  const [extendingMeasurement, setExtendingMeasurement] = useState<{ measurementId: string; isStart: boolean } | null>(null);
   const [histogram, setHistogram] = useState<HistogramData | null>(null);
   const [thresholds, setThresholds] = useState<{ min: number; max: number } | null>(null);
   const [thresholdedImage, setThresholdedImage] = useState<ImageData | null>(null);
@@ -33,7 +35,30 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
   const [viewScale, setViewScale] = useState(1);
   const [offsetX, setOffsetX] = useState(0);
   const [offsetY, setOffsetY] = useState(0);
+  // Canvas dimensions
+  const [canvasWidth, setCanvasWidth] = useState(800);
+  const [canvasHeight, setCanvasHeight] = useState(600);
   const currentImage = getCurrentImage();
+
+  // Update canvas size based on container
+  useEffect(() => {
+    const updateCanvasSize = () => {
+      if (!canvasRef.current) return;
+      const container = canvasRef.current.parentElement;
+      if (!container) return;
+      
+      const rect = container.getBoundingClientRect();
+      const width = Math.max(400, rect.width - 20);
+      const height = Math.max(300, rect.height - 20);
+      
+      setCanvasWidth(width);
+      setCanvasHeight(height);
+    };
+
+    updateCanvasSize();
+    window.addEventListener('resize', updateCanvasSize);
+    return () => window.removeEventListener('resize', updateCanvasSize);
+  }, []);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -41,15 +66,53 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
       // Reset zoom with 'R' key
       if (e.key === 'r' || e.key === 'R') {
         e.preventDefault();
-        setViewScale(1);
-        setOffsetX(0);
-        setOffsetY(0);
+        resetViewToImage();
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
+
+  // Helper to draw endpoint circles
+  const drawEndpoint = (ctx: CanvasRenderingContext2D, point: DrawingPoint, isHovered: boolean) => {
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(point.x, point.y, 8 / viewScale, 0, Math.PI * 2);
+    ctx.fillStyle = isHovered ? 'rgba(255, 255, 0, 0.6)' : 'rgba(255, 0, 0, 0.3)';
+    ctx.fill();
+    ctx.strokeStyle = isHovered ? 'rgba(255, 200, 0, 0.9)' : 'rgba(255, 0, 0, 0.6)';
+    ctx.lineWidth = 2 / viewScale;
+    ctx.stroke();
+    ctx.restore();
+  };
+
+  // Helper to check if mouse is near a point
+  const isNearPoint = (px: number, py: number, point: DrawingPoint, threshold: number = 12) => {
+    const dx = px - point.x;
+    const dy = py - point.y;
+    return Math.sqrt(dx * dx + dy * dy) <= threshold / viewScale;
+  };
+
+  // Function to reset view centered on image
+  const resetViewToImage = () => {
+    if (!currentImage) return;
+    
+    // Calculate scale to fit image in canvas
+    const scaleX = canvasWidth / currentImage.width;
+    const scaleY = canvasHeight / currentImage.height;
+    const fitScale = Math.min(scaleX, scaleY, 1); // Don't scale up beyond 1:1
+    
+    // Center the image
+    const scaledWidth = currentImage.width * fitScale;
+    const scaledHeight = currentImage.height * fitScale;
+    const centerX = (canvasWidth - scaledWidth) / 2;
+    const centerY = (canvasHeight - scaledHeight) / 2;
+    
+    setViewScale(fitScale);
+    setOffsetX(centerX);
+    setOffsetY(centerY);
+  };
 
   // Redraw canvas
   useEffect(() => {
@@ -59,9 +122,9 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    // Set canvas size to image intrinsic size
-    canvas.width = currentImage.width;
-    canvas.height = currentImage.height;
+    // Set canvas size to container size (not image size)
+    canvas.width = canvasWidth;
+    canvas.height = canvasHeight;
 
     // Draw image
     const img = new Image();
@@ -73,10 +136,22 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
 
       ctx.drawImage(img, 0, 0);
 
-      // Draw measurements (lines only) + labels
+      // Draw measurements (lines only) + labels + endpoints
       currentImage.measurements.forEach((measurement: DrawingLine, idx: number) => {
         if (measurement.type === 'measurement') {
           drawLine(ctx, measurement.points, '#FF0000', 2);
+
+          // Draw endpoint circles
+          if (measurement.points.length > 0) {
+            const startPoint = measurement.points[0];
+            const endPoint = measurement.points[measurement.points.length - 1];
+            
+            const isStartHovered = hoveredEndpoint?.measurementId === measurement.id && hoveredEndpoint?.isStart;
+            const isEndHovered = hoveredEndpoint?.measurementId === measurement.id && !hoveredEndpoint?.isStart;
+            
+            drawEndpoint(ctx, startPoint, isStartHovered);
+            drawEndpoint(ctx, endPoint, isEndHovered);
+          }
 
           // Compute a simple centroid for label placement
           if (measurement.points.length > 0) {
@@ -139,17 +214,15 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
       }
     };
     img.src = currentImage.dataUrl;
-  }, [currentImage, currentPoints, isCalibrationMode, viewScale, offsetX, offsetY, detectedLines]);
+  }, [currentImage, currentPoints, isCalibrationMode, viewScale, offsetX, offsetY, detectedLines, canvasWidth, canvasHeight, hoveredEndpoint]);
 
   // Reset view when image changes (defer to next frame)
   useEffect(() => {
     const raf = requestAnimationFrame(() => {
-      setViewScale(1);
-      setOffsetX(0);
-      setOffsetY(0);
+      resetViewToImage();
     });
     return () => cancelAnimationFrame(raf);
-  }, [currentImage?.id]);
+  }, [currentImage?.id, canvasWidth, canvasHeight]);
 
   // Helpers to get positions
   const getCanvasCoords = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -174,24 +247,87 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
     const p = toImageCoords(x, y);
     const newPoint = { x: p.x, y: p.y };
 
-    // Ambos modos: iniciar arrastre
+    // Check if clicking on an endpoint (only in measurement mode)
+    if (!isCalibrationMode) {
+      for (const measurement of currentImage.measurements) {
+        if (measurement.type === 'measurement' && measurement.points.length > 0) {
+          const startPoint = measurement.points[0];
+          const endPoint = measurement.points[measurement.points.length - 1];
+          
+          if (isNearPoint(p.x, p.y, startPoint)) {
+            setIsDrawing(true);
+            setExtendingMeasurement({ measurementId: measurement.id, isStart: true });
+            setCurrentPoints([...measurement.points]);
+            return;
+          }
+          
+          if (isNearPoint(p.x, p.y, endPoint)) {
+            setIsDrawing(true);
+            setExtendingMeasurement({ measurementId: measurement.id, isStart: false });
+            setCurrentPoints([...measurement.points]);
+            return;
+          }
+        }
+      }
+    }
+
+    // Normal behavior: start new drawing
     setIsDrawing(true);
+    setExtendingMeasurement(null);
     setCurrentPoints([newPoint]);
   };
 
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!isDrawing || !canvasRef.current) return;
+    if (!canvasRef.current) return;
 
     const { x, y } = getCanvasCoords(e);
     const p = toImageCoords(x, y);
     const newPoint = { x: p.x, y: p.y };
 
-    if (isCalibrationMode) {
-      // En modo calibración, mostrar una línea recta desde el inicio hasta la posición actual
-      setCurrentPoints([currentPoints[0], newPoint]);
-    } else {
-      // En modo medición, agregar puntos para dibujar curva
-      setCurrentPoints((prev) => [...prev, newPoint]);
+    // Update hover state (only in measurement mode when not drawing)
+    if (!isDrawing && !isCalibrationMode && currentImage) {
+      let foundHover = false;
+      for (const measurement of currentImage.measurements) {
+        if (measurement.type === 'measurement' && measurement.points.length > 0) {
+          const startPoint = measurement.points[0];
+          const endPoint = measurement.points[measurement.points.length - 1];
+          
+          if (isNearPoint(p.x, p.y, startPoint)) {
+            setHoveredEndpoint({ measurementId: measurement.id, isStart: true });
+            foundHover = true;
+            break;
+          }
+          
+          if (isNearPoint(p.x, p.y, endPoint)) {
+            setHoveredEndpoint({ measurementId: measurement.id, isStart: false });
+            foundHover = true;
+            break;
+          }
+        }
+      }
+      if (!foundHover && hoveredEndpoint) {
+        setHoveredEndpoint(null);
+      }
+    }
+
+    // Handle drawing
+    if (isDrawing) {
+      if (isCalibrationMode) {
+        // En modo calibración, mostrar una línea recta desde el inicio hasta la posición actual
+        setCurrentPoints([currentPoints[0], newPoint]);
+      } else if (extendingMeasurement) {
+        // Extending existing measurement
+        if (extendingMeasurement.isStart) {
+          // Adding to the start (prepend points)
+          setCurrentPoints((prev) => [newPoint, ...prev]);
+        } else {
+          // Adding to the end (append points)
+          setCurrentPoints((prev) => [...prev, newPoint]);
+        }
+      } else {
+        // Normal new measurement
+        setCurrentPoints((prev) => [...prev, newPoint]);
+      }
     }
   };
 
@@ -201,6 +337,7 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
 
     if (currentPoints.length < 2) {
       setCurrentPoints([]);
+      setExtendingMeasurement(null);
       return;
     }
 
@@ -241,8 +378,25 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
           alert('Longitud inválida. Por favor, intenta de nuevo.');
         }
       }
+    } else if (extendingMeasurement) {
+      // Update existing measurement
+      const pixelLength = calculateTotalDistance(currentPoints);
+      const updatedMeasurements = currentImage.measurements.map((m) => 
+        m.id === extendingMeasurement.measurementId
+          ? { ...m, points: currentPoints, pixelLength, timestamp: Date.now() }
+          : m
+      );
+      
+      // Replace all measurements for this image
+      setImages((prev) =>
+        prev.map((img) =>
+          img.id === currentImage.id
+            ? { ...img, measurements: updatedMeasurements }
+            : img
+        )
+      );
     } else {
-      // Guardar medición
+      // Guardar nueva medición
       const pixelLength = calculateTotalDistance(currentPoints);
       const measurement: DrawingLine = {
         id: generateId(),
@@ -258,6 +412,7 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
     }
 
     setCurrentPoints([]);
+    setExtendingMeasurement(null);
   };
 
   const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
@@ -285,9 +440,7 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
   };
 
   const handleResetView = () => {
-    setViewScale(1);
-    setOffsetX(0);
-    setOffsetY(0);
+    resetViewToImage();
   };
 
   const handleAutoDetect = async () => {
@@ -445,7 +598,11 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
           onMouseUp={handleMouseUp}
           onMouseLeave={handleMouseUp}
           onWheel={handleWheel}
-          style={{ cursor: isCalibrationMode ? 'crosshair' : (isDrawing ? 'crosshair' : 'pointer') }}
+          style={{ 
+            cursor: isCalibrationMode 
+              ? 'crosshair' 
+              : (isDrawing ? 'crosshair' : (hoveredEndpoint ? 'grab' : 'pointer'))
+          }}
         />
       </div>
       
