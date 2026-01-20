@@ -20,8 +20,9 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
   onCropComplete,
   calibrationUnit 
 }) => {
-  const { getCurrentImage, addMeasurement, updateCalibration, updateCrop, images, setImages } = useMedidor();
+  const { getCurrentImage, addMeasurement, updateCalibration, updateCrop, setImages } = useMedidor();
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const histogramCanvasRef = useRef<HTMLCanvasElement>(null);
   const thresholdCanvasRef = useRef<HTMLCanvasElement>(null);
   const edgesCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -119,21 +120,26 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
   // Update canvas size based on container
   useEffect(() => {
     const updateCanvasSize = () => {
-      if (!canvasRef.current) return;
-      const container = canvasRef.current.parentElement;
-      if (!container) return;
+      if (!containerRef.current) return;
       
-      const rect = container.getBoundingClientRect();
-      const width = Math.max(400, rect.width - 20);
-      const height = Math.max(300, rect.height - 20);
+      const rect = containerRef.current.getBoundingClientRect();
+      const width = Math.floor(rect.width);
+      const height = Math.floor(rect.height);
       
-      setCanvasWidth(width);
-      setCanvasHeight(height);
+      if (width > 0 && height > 0) {
+        setCanvasWidth(width);
+        setCanvasHeight(height);
+      }
     };
 
     updateCanvasSize();
-    window.addEventListener('resize', updateCanvasSize);
-    return () => window.removeEventListener('resize', updateCanvasSize);
+    
+    const resizeObserver = new ResizeObserver(updateCanvasSize);
+    if (containerRef.current) {
+      resizeObserver.observe(containerRef.current);
+    }
+    
+    return () => resizeObserver.disconnect();
   }, []);
 
   // Keyboard shortcuts
@@ -838,7 +844,7 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
           {isDetecting ? '⏳ Analizando...' : '🔍 Detectar raíces'}
         </button>
       </div>
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'auto' }}>
+      <div className={styles.canvasContainer} ref={containerRef}>
         <canvas
           ref={canvasRef}
           className={styles.canvas}
