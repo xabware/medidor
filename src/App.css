@@ -37,6 +37,156 @@ body {
 
 .app-container { display: flex; flex-direction: column; height: 100vh; }
 
+/* Header */
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 var(--space-5);
+  height: 50px;
+  background: linear-gradient(135deg, #2175f3 0%, #1557b0 100%);
+  color: white;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  flex-shrink: 0;
+}
+
+.app-title {
+  margin: 0;
+  font-size: 1.2rem;
+  font-weight: 600;
+}
+
+.tutorial-button {
+  background: rgba(255, 255, 255, 0.2);
+  color: white;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.tutorial-button:hover {
+  background: rgba(255, 255, 255, 0.3);
+  border-color: rgba(255, 255, 255, 0.5);
+}
+
+/* Tutorial Modal */
+.tutorial-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+  animation: fadeIn 0.2s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.tutorial-modal {
+  background: var(--color-surface);
+  border-radius: var(--radius);
+  max-width: 700px;
+  max-height: 85vh;
+  width: 90%;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  display: flex;
+  flex-direction: column;
+  animation: slideUp 0.3s ease;
+}
+
+@keyframes slideUp {
+  from {
+    transform: translateY(30px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.tutorial-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.tutorial-header h2 {
+  margin: 0;
+  font-size: 1.4rem;
+  color: var(--color-text);
+}
+
+.close-button {
+  background: transparent;
+  border: none;
+  font-size: 1.5rem;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  padding: 4px 8px;
+  line-height: 1;
+  transition: color 0.2s;
+  border-radius: 4px;
+}
+
+.close-button:hover {
+  color: var(--color-danger);
+  background: rgba(255, 82, 82, 0.1);
+}
+
+.tutorial-content {
+  padding: var(--space-5);
+  overflow-y: auto;
+}
+
+.tutorial-content section {
+  margin-bottom: var(--space-5);
+}
+
+.tutorial-content section:last-child {
+  margin-bottom: 0;
+}
+
+.tutorial-content h3 {
+  margin: 0 0 var(--space-3) 0;
+  color: var(--color-primary);
+  font-size: 1.1rem;
+}
+
+.tutorial-content p {
+  margin: 0 0 var(--space-2) 0;
+  line-height: 1.6;
+  color: var(--color-text);
+}
+
+.tutorial-content ul {
+  margin: var(--space-2) 0;
+  padding-left: var(--space-5);
+  line-height: 1.8;
+}
+
+.tutorial-content li {
+  margin-bottom: var(--space-2);
+}
+
+.tutorial-content strong {
+  color: var(--color-primary);
+  font-weight: 600;
+}
+
 .app-layout {
   display: grid;
   grid-template-columns: 280px 1fr 320px;
