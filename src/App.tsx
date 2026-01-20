@@ -7,6 +7,7 @@ import './App.css';
 
 function AppContent() {
   const [isCalibrationMode, setIsCalibrationMode] = useState(false);
+  const [isCropMode, setIsCropMode] = useState(false);
   const calibrationUnit = 'cm';
 
   return (
@@ -17,6 +18,9 @@ function AppContent() {
             onStartCalibration={() => setIsCalibrationMode(true)}
             onCancelCalibration={() => setIsCalibrationMode(false)}
             isCalibrationMode={isCalibrationMode}
+            onStartCrop={() => setIsCropMode(true)}
+            onCancelCrop={() => setIsCropMode(false)}
+            isCropMode={isCropMode}
             calibrationUnit={calibrationUnit}
           />
         </aside>
@@ -25,6 +29,8 @@ function AppContent() {
           <ImageEditor
             isCalibrationMode={isCalibrationMode}
             onCalibrationComplete={() => setIsCalibrationMode(false)}
+            isCropMode={isCropMode}
+            onCropComplete={() => setIsCropMode(false)}
             calibrationUnit={calibrationUnit}
           />
         </main>

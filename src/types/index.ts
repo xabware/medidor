@@ -3,6 +3,15 @@ export interface DrawingPoint {
   y: number;
 }
 
+export interface CropRegion {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  croppedDataUrl: string;
+  timestamp: number;
+}
+
 export interface DrawingLine {
   id: string;
   points: DrawingPoint[];
@@ -28,6 +37,7 @@ export interface LoadedImage {
   height: number;
   measurements: DrawingLine[];
   calibration?: ImageCalibration;
+  crop?: CropRegion;
   timestamp: number;
 }
 

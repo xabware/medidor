@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { useMedidor } from '../context/MedidorContext';
-import type { DrawingPoint, DrawingLine } from '../types';
+import type { DrawingPoint, DrawingLine, CropRegion } from '../types';
 import { calculateTotalDistance, drawLine, generateId } from '../utils/drawing';
 import { detectRoots, drawHistogram, type HistogramData } from '../utils/rootDetection';
 import styles from './ImageEditor.module.css';
@@ -8,21 +8,29 @@ import styles from './ImageEditor.module.css';
 interface ImageEditorProps {
   isCalibrationMode: boolean;
   onCalibrationComplete: () => void;
+  isCropMode: boolean;
+  onCropComplete: () => void;
   calibrationUnit: string;
 }
 
 export const ImageEditor: React.FC<ImageEditorProps> = ({ 
   isCalibrationMode, 
   onCalibrationComplete,
+  isCropMode,
+  onCropComplete,
   calibrationUnit 
 }) => {
-  const { getCurrentImage, addMeasurement, updateCalibration, images, setImages } = useMedidor();
+  const { getCurrentImage, addMeasurement, updateCalibration, updateCrop, images, setImages } = useMedidor();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const histogramCanvasRef = useRef<HTMLCanvasElement>(null);
   const thresholdCanvasRef = useRef<HTMLCanvasElement>(null);
   const edgesCanvasRef = useRef<HTMLCanvasElement>(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const [currentPoints, setCurrentPoints] = useState<DrawingPoint[]>([]);
+  const [cropStart, setCropStart] = useState<DrawingPoint | null>(null);
+  const [cropEnd, setCropEnd] = useState<DrawingPoint | null>(null);
+  const [isPanning, setIsPanning] = useState(false);
+  const [panStart, setPanStart] = useState<{ x: number; y: number } | null>(null);
   const [isDetecting, setIsDetecting] = useState(false);
   const [hoveredEndpoint, setHoveredEndpoint] = useState<{ measurementId: string; isStart: boolean } | null>(null);
   const [extendingMeasurement, setExtendingMeasurement] = useState<{ measurementId: string; isStart: boolean } | null>(null);
@@ -38,7 +46,75 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
   // Canvas dimensions
   const [canvasWidth, setCanvasWidth] = useState(800);
   const [canvasHeight, setCanvasHeight] = useState(600);
+  // History for undo/redo
+  const [history, setHistory] = useState<DrawingLine[][]>([]);
+  const [historyIndex, setHistoryIndex] = useState(-1);
   const currentImage = getCurrentImage();
+
+  // Save current measurements state to history
+  const saveToHistory = (measurements: DrawingLine[]) => {
+    const newHistory = history.slice(0, historyIndex + 1);
+    newHistory.push(JSON.parse(JSON.stringify(measurements)));
+    // Limit history to 50 steps
+    if (newHistory.length > 50) {
+      newHistory.shift();
+      setHistoryIndex(49);
+    } else {
+      setHistoryIndex(newHistory.length - 1);
+    }
+    setHistory(newHistory);
+  };
+
+  // Initialize history when image changes
+  useEffect(() => {
+    if (currentImage) {
+      setHistory([JSON.parse(JSON.stringify(currentImage.measurements))]);
+      setHistoryIndex(0);
+    }
+  }, [currentImage?.id]);
+
+  // Track measurements changes to update history (but only from external sources)
+  useEffect(() => {
+    if (!currentImage || history.length === 0) return;
+    
+    const currentMeasurements = JSON.stringify(currentImage.measurements);
+    const historyMeasurements = JSON.stringify(history[historyIndex]);
+    
+    // If measurements changed from external source (like delete from panel), update history
+    if (currentMeasurements !== historyMeasurements) {
+      saveToHistory(currentImage.measurements);
+    }
+  }, [currentImage?.measurements]);
+
+  // Undo function
+  const handleUndo = () => {
+    if (!currentImage || historyIndex <= 0) return;
+    const newIndex = historyIndex - 1;
+    const measurements = history[newIndex];
+    setImages((prev) =>
+      prev.map((img) =>
+        img.id === currentImage.id
+          ? { ...img, measurements: JSON.parse(JSON.stringify(measurements)) }
+          : img
+      )
+    );
+    setHistoryIndex(newIndex);
+  };
+
+  // Redo function
+  const handleRedo = () => {
+    if (!currentImage || historyIndex >= history.length - 1) return;
+    const newIndex = historyIndex + 1;
+    const measurements = history[newIndex];
+    setImages((prev) =>
+      prev.map((img) =>
+        img.id === currentImage.id
+          ? { ...img, measurements: JSON.parse(JSON.stringify(measurements)) }
+          : img
+      )
+    );
+    setHistoryIndex(newIndex);
+  };
 
   // Update canvas size based on container
   useEffect(() => {
@@ -68,11 +144,21 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
         e.preventDefault();
         resetViewToImage();
       }
+      // Undo with Ctrl+Z
+      if (e.ctrlKey && e.key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        handleUndo();
+      }
+      // Redo with Ctrl+Shift+Z or Ctrl+Y
+      if ((e.ctrlKey && e.shiftKey && e.key === 'Z') || (e.ctrlKey && e.key === 'y')) {
+        e.preventDefault();
+        handleRedo();
+      }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [historyIndex, history, currentImage]);
 
   // Helper to draw endpoint circles
   const drawEndpoint = (ctx: CanvasRenderingContext2D, point: DrawingPoint, isHovered: boolean) => {
@@ -98,14 +184,18 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
   const resetViewToImage = () => {
     if (!currentImage) return;
     
+    // Use original dimensions in crop mode, otherwise use cropped if available
+    const imageWidth = isCropMode ? currentImage.width : (currentImage.crop ? currentImage.crop.width : currentImage.width);
+    const imageHeight = isCropMode ? currentImage.height : (currentImage.crop ? currentImage.crop.height : currentImage.height);
+    
     // Calculate scale to fit image in canvas
-    const scaleX = canvasWidth / currentImage.width;
-    const scaleY = canvasHeight / currentImage.height;
+    const scaleX = canvasWidth / imageWidth;
+    const scaleY = canvasHeight / imageHeight;
     const fitScale = Math.min(scaleX, scaleY, 1); // Don't scale up beyond 1:1
     
     // Center the image
-    const scaledWidth = currentImage.width * fitScale;
-    const scaledHeight = currentImage.height * fitScale;
+    const scaledWidth = imageWidth * fitScale;
+    const scaledHeight = imageHeight * fitScale;
     const centerX = (canvasWidth - scaledWidth) / 2;
     const centerY = (canvasHeight - scaledHeight) / 2;
     
@@ -134,7 +224,19 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.setTransform(viewScale, 0, 0, viewScale, offsetX, offsetY);
 
-      ctx.drawImage(img, 0, 0);
+      // Use original image in crop mode, otherwise use cropped if available
+      const imageToUse = isCropMode ? currentImage.dataUrl : (currentImage.crop ? currentImage.crop.croppedDataUrl : currentImage.dataUrl);
+      const imgToDraw = new Image();
+      imgToDraw.onload = () => {
+        ctx.drawImage(imgToDraw, 0, 0);
+        
+        // Draw measurements, etc.
+        drawOverlays();
+      };
+      imgToDraw.src = imageToUse;
+    };
+
+    const drawOverlays = () => {
 
       // Draw measurements (lines only) + labels + endpoints
       currentImage.measurements.forEach((measurement: DrawingLine, idx: number) => {
@@ -208,21 +310,51 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
       }
 
       // Draw current drawing (no points)
-      if (currentPoints.length > 0) {
+      if (currentPoints.length > 0 && !isCropMode) {
         const color = isCalibrationMode ? '#0000FF' : '#FF0000';
         drawLine(ctx, currentPoints, color, 2);
       }
+      
+      // Draw crop rectangle if in crop mode
+      if (isCropMode && cropStart && cropEnd) {
+        ctx.save();
+        const x = Math.min(cropStart.x, cropEnd.x);
+        const y = Math.min(cropStart.y, cropEnd.y);
+        const width = Math.abs(cropEnd.x - cropStart.x);
+        const height = Math.abs(cropEnd.y - cropStart.y);
+        
+        // Semi-transparent overlay outside crop area
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+        ctx.fillRect(0, 0, currentImage.width, y); // top
+        ctx.fillRect(0, y, x, height); // left
+        ctx.fillRect(x + width, y, currentImage.width - (x + width), height); // right
+        ctx.fillRect(0, y + height, currentImage.width, currentImage.height - (y + height)); // bottom
+        
+        // Crop rectangle border
+        ctx.strokeStyle = '#00FF00';
+        ctx.lineWidth = 2 / viewScale;
+        ctx.strokeRect(x, y, width, height);
+        ctx.restore();
+      }
     };
     img.src = currentImage.dataUrl;
-  }, [currentImage, currentPoints, isCalibrationMode, viewScale, offsetX, offsetY, detectedLines, canvasWidth, canvasHeight, hoveredEndpoint]);
+  }, [currentImage, currentPoints, isCalibrationMode, isCropMode, cropStart, cropEnd, viewScale, offsetX, offsetY, detectedLines, canvasWidth, canvasHeight, hoveredEndpoint]);
 
-  // Reset view when image changes (defer to next frame)
+  // Reset crop state when entering crop mode
+  useEffect(() => {
+    if (isCropMode) {
+      setCropStart(null);
+      setCropEnd(null);
+    }
+  }, [isCropMode]);
+
+  // Reset view when image changes or crop mode changes (defer to next frame)
   useEffect(() => {
     const raf = requestAnimationFrame(() => {
       resetViewToImage();
     });
     return () => cancelAnimationFrame(raf);
-  }, [currentImage?.id, canvasWidth, canvasHeight]);
+  }, [currentImage?.id, canvasWidth, canvasHeight, isCropMode]);
 
   // Helpers to get positions
   const getCanvasCoords = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -246,6 +378,22 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
     const { x, y } = getCanvasCoords(e);
     const p = toImageCoords(x, y);
     const newPoint = { x: p.x, y: p.y };
+
+    // Right click: start panning
+    if (e.button === 2) {
+      setIsPanning(true);
+      setPanStart({ x: e.clientX, y: e.clientY });
+      return;
+    }
+
+    // Left click continues with normal behavior
+    // Crop mode: start drawing rectangle
+    if (isCropMode) {
+      setCropStart(newPoint);
+      setCropEnd(newPoint);
+      setIsDrawing(true);
+      return;
+    }
 
     // Check if clicking on an endpoint (only in measurement mode)
     if (!isCalibrationMode) {
@@ -280,12 +428,28 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!canvasRef.current) return;
 
+    // Handle panning with right mouse button
+    if (isPanning && panStart) {
+      const dx = e.clientX - panStart.x;
+      const dy = e.clientY - panStart.y;
+      setOffsetX(prev => prev + dx);
+      setOffsetY(prev => prev + dy);
+      setPanStart({ x: e.clientX, y: e.clientY });
+      return;
+    }
+
     const { x, y } = getCanvasCoords(e);
     const p = toImageCoords(x, y);
     const newPoint = { x: p.x, y: p.y };
 
+    // Crop mode: update rectangle
+    if (isDrawing && isCropMode && cropStart) {
+      setCropEnd(newPoint);
+      return;
+    }
+
     // Update hover state (only in measurement mode when not drawing)
-    if (!isDrawing && !isCalibrationMode && currentImage) {
+    if (!isDrawing && !isCalibrationMode && !isCropMode && currentImage) {
       let foundHover = false;
       for (const measurement of currentImage.measurements) {
         if (measurement.type === 'measurement' && measurement.points.length > 0) {
@@ -331,9 +495,61 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
     }
   };
 
-  const handleMouseUp = () => {
+  const handleMouseUp = async () => {
+    // End panning
+    if (isPanning) {
+      setIsPanning(false);
+      setPanStart(null);
+      return;
+    }
+
     if (!isDrawing || !currentImage) return;
     setIsDrawing(false);
+
+    // Crop mode: process the crop
+    if (isCropMode && cropStart && cropEnd) {
+      const x = Math.min(cropStart.x, cropEnd.x);
+      const y = Math.min(cropStart.y, cropEnd.y);
+      const width = Math.abs(cropEnd.x - cropStart.x);
+      const height = Math.abs(cropEnd.y - cropStart.y);
+
+      if (width > 10 && height > 10) {
+        // Create a temporary canvas to crop the image
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = width;
+        tempCanvas.height = height;
+        const tempCtx = tempCanvas.getContext('2d');
+
+        if (tempCtx) {
+          const img = new Image();
+          await new Promise<void>((resolve) => {
+            img.onload = () => {
+              // Draw the cropped portion
+              tempCtx.drawImage(img, x, y, width, height, 0, 0, width, height);
+              resolve();
+            };
+            img.src = currentImage.dataUrl;
+          });
+
+          const croppedDataUrl = tempCanvas.toDataURL('image/png');
+          const cropRegion: CropRegion = {
+            x,
+            y,
+            width,
+            height,
+            croppedDataUrl,
+            timestamp: Date.now(),
+          };
+
+          updateCrop(currentImage.id, cropRegion);
+          onCropComplete();
+        }
+      }
+
+      setCropStart(null);
+      setCropEnd(null);
+      return;
+    }
 
     if (currentPoints.length < 2) {
       setCurrentPoints([]);
@@ -395,6 +611,7 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
             : img
         )
       );
+      saveToHistory(updatedMeasurements);
     } else {
       // Guardar nueva medición
       const pixelLength = calculateTotalDistance(currentPoints);
@@ -409,6 +626,7 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
 
       // No guardamos realLength, se calculará dinámicamente desde pixelsPerUnit
       addMeasurement(currentImage.id, measurement);
+      saveToHistory([...currentImage.measurements, measurement]);
     }
 
     setCurrentPoints([]);
@@ -448,15 +666,20 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
     
     setIsDetecting(true);
     try {
+      // Use cropped image if available, otherwise use original
+      const imageDataUrl = currentImage.crop ? currentImage.crop.croppedDataUrl : currentImage.dataUrl;
+      const imageWidth = currentImage.crop ? currentImage.crop.width : currentImage.width;
+      const imageHeight = currentImage.crop ? currentImage.crop.height : currentImage.height;
+      
       // Crear un canvas temporal con la imagen sin transformaciones
       const tempCanvas = document.createElement('canvas');
-      tempCanvas.width = currentImage.width;
-      tempCanvas.height = currentImage.height;
+      tempCanvas.width = imageWidth;
+      tempCanvas.height = imageHeight;
       const tempCtx = tempCanvas.getContext('2d');
       
       if (!tempCtx) throw new Error('No se pudo crear canvas temporal');
       
-      // Cargar y dibujar la imagen original
+      // Cargar y dibujar la imagen (original o recortada)
       const img = new Image();
       await new Promise<void>((resolve, reject) => {
         img.onload = () => {
@@ -464,7 +687,7 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
           resolve();
         };
         img.onerror = reject;
-        img.src = currentImage.dataUrl;
+        img.src = imageDataUrl;
       });
       
       const result = await detectRoots(tempCanvas, (msg: string) => {
@@ -510,18 +733,23 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
     const sortedLines = [...detectedLines].sort((a, b) => calculateTotalDistance(b.points) - calculateTotalDistance(a.points));
     const selected = sortedLines.slice(0, nRoots);
 
+    const newMeasurements = [...currentImage.measurements];
     selected.forEach(line => {
       if (line.points.length > 1) {
-        addMeasurement(currentImage.id, {
+        const measurement = {
           id: generateId(),
           imageId: currentImage.id,
-          type: 'measurement',
+          type: 'measurement' as const,
           points: line.points,
           pixelLength: calculateTotalDistance(line.points),
           timestamp: Date.now()
-        });
+        };
+        addMeasurement(currentImage.id, measurement);
+        newMeasurements.push(measurement);
       }
     });
+    
+    saveToHistory(newMeasurements);
 
     handleCloseHistogram();
     alert(`Se agregaron ${selected.length} mediciones (las ${selected.length} raíces más largas)`);
@@ -574,16 +802,37 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
           📏 Modo calibración: Arrastra en el canvas para dibujar la línea de calibración
         </div>
       )}
+      {isCropMode && (
+        <div className={styles.calibrationBanner} style={{ backgroundColor: '#9c27b0' }}>
+          ✂️ Modo recorte: Arrastra en el canvas para dibujar un rectángulo de recorte
+        </div>
+      )}
       <div className={styles.toolbar}>
         <button className={styles.toolbarButton} onClick={handleResetView} title="Restablecer vista (zoom/pan) - Atajo: R">
           Restablecer zoom
         </button>
         <span className={styles.zoomInfo}>{Math.round(viewScale * 100)}%</span>
+        <button 
+          className={styles.toolbarButton} 
+          onClick={handleUndo}
+          disabled={historyIndex <= 0}
+          title="Deshacer - Atajo: Ctrl+Z"
+        >
+          ↶ Deshacer
+        </button>
+        <button 
+          className={styles.toolbarButton} 
+          onClick={handleRedo}
+          disabled={historyIndex >= history.length - 1}
+          title="Rehacer - Atajo: Ctrl+Shift+Z o Ctrl+Y"
+        >
+          ↷ Rehacer
+        </button>
         <div style={{ flex: 1 }}></div>
         <button 
           className={styles.toolbarButton} 
           onClick={handleAutoDetect}
-          disabled={isDetecting || isCalibrationMode}
+          disabled={isDetecting || isCalibrationMode || isCropMode}
           title="Detectar raíces automáticamente"
         >
           {isDetecting ? '⏳ Analizando...' : '🔍 Detectar raíces'}
@@ -598,10 +847,11 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
           onMouseUp={handleMouseUp}
           onMouseLeave={handleMouseUp}
           onWheel={handleWheel}
+          onContextMenu={(e) => e.preventDefault()}
           style={{ 
-            cursor: isCalibrationMode 
+            cursor: (isCalibrationMode || isCropMode)
               ? 'crosshair' 
-              : (isDrawing ? 'crosshair' : (hoveredEndpoint ? 'grab' : 'pointer'))
+              : (isPanning ? 'grabbing' : (isDrawing ? 'crosshair' : (hoveredEndpoint ? 'grab' : 'default')))
           }}
         />
       </div>

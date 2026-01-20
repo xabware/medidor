@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useCallback } from 'react';
-import type { LoadedImage, DrawingLine, ImageCalibration } from '../types';
+import type { LoadedImage, DrawingLine, ImageCalibration, CropRegion } from '../types';
 import { generateId } from '../utils/drawing';
 
 interface MedidorContextType {
@@ -10,6 +10,7 @@ interface MedidorContextType {
   setCurrentImage: (imageId: string) => void;
   addMeasurement: (imageId: string, line: DrawingLine) => void;
   updateCalibration: (imageId: string, calibration: ImageCalibration) => void;
+  updateCrop: (imageId: string, crop: CropRegion) => void;
   removeMeasurement: (imageId: string, lineId: string) => void;
   clearAllMeasurements: () => void;
   getCurrentImage: () => LoadedImage | undefined;
@@ -86,6 +87,16 @@ export const MedidorProvider: React.FC<{ children: React.ReactNode }> = ({ child
     );
   }, []);
 
+  const updateCrop = useCallback((imageId: string, crop: CropRegion) => {
+    setImages((prev) =>
+      prev.map((img) =>
+        img.id === imageId
+          ? { ...img, crop }
+          : img
+      )
+    );
+  }, []);
+
   const removeMeasurement = useCallback((imageId: string, lineId: string) => {
     setImages((prev) =>
       prev.map((img) =>
@@ -121,6 +132,7 @@ export const MedidorProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setCurrentImage: setCurrentImageId,
     addMeasurement,
     updateCalibration,
+    updateCrop,
     removeMeasurement,
     clearAllMeasurements,
     getCurrentImage,
