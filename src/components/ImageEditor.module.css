@@ -1,0 +1,187 @@
+.editor { display: flex; flex-direction: column; height: 100%; gap: var(--space-4); }
+
+.calibrationBanner { background-color: var(--color-primary); color: var(--color-primary-contrast); padding: var(--space-3); border-radius: var(--radius-sm); text-align: center; font-size: 0.95rem; font-weight: 600; box-shadow: var(--shadow); }
+
+.toolbar { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-2); }
+
+.toolbarButton { background-color: #e9eef6; color: var(--color-text); border: 1px solid var(--color-border); border-radius: 8px; padding: 8px 12px; cursor: pointer; font-size: 0.9rem; }
+
+.toolbarButton:hover:not(:disabled) { background-color: #dfe7f2; }
+
+.toolbarButton:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.zoomInfo { color: var(--color-text-muted); font-size: 0.9rem; }
+
+.editorPlaceholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  background-color: #f5f5f5;
+  border-radius: 8px;
+  color: #999;
+  font-size: 1.1rem;
+}
+
+.canvas { border: 1px solid var(--color-border); border-radius: var(--radius-sm); background-color: var(--color-surface); cursor: crosshair; max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain; display: block; margin: auto; box-shadow: var(--shadow); }
+
+.measurements {
+  background-color: #f9f9f9;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 1rem;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.measurements h3 {
+  margin: 0 0 0.5rem 0;
+  font-size: 0.95rem;
+  color: #333;
+}
+
+.measurements ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.measurements li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5rem;
+  background-color: white;
+  border-bottom: 1px solid #eee;
+  font-size: 0.9rem;
+  color: #333;
+}
+
+.measurements li:last-child {
+  border-bottom: none;
+}
+
+.deleteBtn {
+  background-color: #ff6b6b;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  padding: 0.25rem 0.5rem;
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+
+.deleteBtn:hover {
+  background-color: #ff5252;
+}
+
+.histogramOverlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.histogramPanel {
+  background: var(--color-surface);
+  border-radius: var(--radius);
+  padding: var(--space-4);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  max-width: 90%;
+  max-height: 90%;
+  overflow: auto;
+}
+
+.histogramHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--space-4);
+}
+
+.histogramHeader h3 {
+  margin: 0;
+  font-size: 1.2rem;
+  color: var(--color-text);
+}
+
+.analysisGrid {
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: var(--space-5);
+  align-items: start;
+}
+
+.analysisSection h4 {
+  margin: 0 0 var(--space-2) 0;
+  font-size: 0.95rem;
+  color: var(--color-text);
+  font-weight: 600;
+}
+
+.closeButton {
+  background: none;
+  border: none;
+  font-size: 1.5rem;
+  cursor: pointer;
+  color: var(--color-text-muted);
+  padding: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+}
+
+.closeButton:hover {
+  background: var(--color-border);
+  color: var(--color-text);
+}
+
+.histogramCanvas {
+  display: block;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.thresholdCanvas {
+  display: block;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  max-width: 400px;
+  max-height: 400px;
+  width: 100%;
+  height: auto;
+  object-fit: contain;
+}
+
+.histogramInfo {
+  margin: var(--space-2) 0 0 0;
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+  text-align: center;
+}
+
+.addMeasurementsButton {
+  background-color: var(--color-primary);
+  color: var(--color-primary-contrast);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin-top: var(--space-3);
+  width: 100%;
+}
+
+.addMeasurementsButton:hover {
+  opacity: 0.9;
+}

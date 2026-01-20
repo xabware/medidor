@@ -1,0 +1,87 @@
+import type { DrawingPoint } from '../types';
+
+export function calculateDistance(p1: DrawingPoint, p2: DrawingPoint): number {
+  return Math.sqrt(Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2));
+}
+
+export function calculateTotalDistance(points: DrawingPoint[]): number {
+  if (points.length < 2) return 0;
+  
+  let total = 0;
+  for (let i = 0; i < points.length - 1; i++) {
+    total += calculateDistance(points[i], points[i + 1]);
+  }
+  return total;
+}
+
+export function generateId(): string {
+  return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+}
+
+export function downloadCSV(data: Record<string, string | number>[], filename: string = 'mediciones.csv'): void {
+  const headers = Object.keys(data[0] || {});
+  
+  // Usar punto y coma como separador (formato CSV estándar para Excel en español)
+  const csvContent = [
+    headers.join(';'),
+    ...data.map(row => headers.map(header => {
+      const value = row[header];
+      if (value === undefined || value === null) return '';
+      // Reemplazar punto decimal por coma para Excel en español
+      if (typeof value === 'number') {
+        return value.toString().replace('.', ',');
+      }
+      return value;
+    }).join(';'))
+  ].join('\n');
+
+  // Agregar BOM UTF-8 para que Excel reconozca correctamente los caracteres especiales
+  const BOM = '\uFEFF';
+  const blob = new Blob([BOM + csvContent], { type: 'text/csv;charset=utf-8;' });
+  const link = document.createElement('a');
+  const url = URL.createObjectURL(blob);
+  
+  link.setAttribute('href', url);
+  link.setAttribute('download', filename);
+  link.style.visibility = 'hidden';
+  
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
+export function drawLine(
+  ctx: CanvasRenderingContext2D,
+  points: DrawingPoint[],
+  strokeStyle: string = '#FF0000',
+  lineWidth: number = 2
+): void {
+  if (points.length < 2) return;
+
+  ctx.strokeStyle = strokeStyle;
+  ctx.lineWidth = lineWidth;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+
+  ctx.beginPath();
+  ctx.moveTo(points[0].x, points[0].y);
+
+  for (let i = 1; i < points.length; i++) {
+    ctx.lineTo(points[i].x, points[i].y);
+  }
+
+  ctx.stroke();
+}
+
+export function drawPoint(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  radius: number = 3,
+  fillStyle: string = '#FF0000'
+): void {
+  ctx.fillStyle = fillStyle;
+  ctx.beginPath();
+  ctx.arc(x, y, radius, 0, 2 * Math.PI);
+  ctx.fill();
+}
