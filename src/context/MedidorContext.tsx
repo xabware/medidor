@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useCallback } from 'react';
-import type { LoadedImage, DrawingLine, ImageCalibration, CropRegion } from '../types';
+import type { LoadedImage, DrawingLine, ImageCalibration, CropRegion, InstanceSegment } from '../types';
 import { generateId } from '../utils/drawing';
 
 interface MedidorContextType {
@@ -15,6 +15,11 @@ interface MedidorContextType {
   clearAllMeasurements: () => void;
   getCurrentImage: () => LoadedImage | undefined;
   setImages: React.Dispatch<React.SetStateAction<LoadedImage[]>>;
+  // Instance segmentation methods
+  addInstances: (imageId: string, instances: InstanceSegment[]) => void;
+  removeInstance: (imageId: string, instanceId: string) => void;
+  clearInstances: (imageId: string) => void;
+  updateInstanceMeasurement: (imageId: string, instanceId: string, measurement: DrawingLine) => void;
 }
 
 const MedidorContext = createContext<MedidorContextType | undefined>(undefined);
@@ -124,6 +129,66 @@ export const MedidorProvider: React.FC<{ children: React.ReactNode }> = ({ child
     [images, currentImageId]
   );
 
+  // Instance segmentation methods
+  const addInstances = useCallback((imageId: string, instances: InstanceSegment[]) => {
+    setImages((prev) =>
+      prev.map((img) =>
+        img.id === imageId
+          ? { ...img, instances }
+          : img
+      )
+    );
+  }, []);
+
+  const removeInstance = useCallback((imageId: string, instanceId: string) => {
+    setImages((prev) =>
+      prev.map((img) =>
+        img.id === imageId
+          ? {
+              ...img,
+              instances: img.instances?.filter((inst) => inst.id !== instanceId),
+              measurements: img.measurements.filter((m) => m.instanceId !== instanceId),
+            }
+          : img
+      )
+    );
+  }, []);
+
+  const clearInstances = useCallback((imageId: string) => {
+    setImages((prev) =>
+      prev.map((img) =>
+        img.id === imageId
+          ? {
+              ...img,
+              instances: [],
+              measurements: img.measurements.filter((m) => m.type !== 'instance'),
+            }
+          : img
+      )
+    );
+  }, []);
+
+  const updateInstanceMeasurement = useCallback((imageId: string, instanceId: string, measurement: DrawingLine) => {
+    setImages((prev) =>
+      prev.map((img) =>
+        img.id === imageId
+          ? {
+              ...img,
+              instances: img.instances?.map((inst) =>
+                inst.id === instanceId
+                  ? { ...inst, measurement }
+                  : inst
+              ),
+              measurements: [
+                ...img.measurements.filter((m) => m.instanceId !== instanceId),
+                measurement,
+              ],
+            }
+          : img
+      )
+    );
+  }, []);
+
   const value: MedidorContextType = {
     images,
     currentImageId,
@@ -137,6 +202,10 @@ export const MedidorProvider: React.FC<{ children: React.ReactNode }> = ({ child
     clearAllMeasurements,
     getCurrentImage,
     setImages,
+    addInstances,
+    removeInstance,
+    clearInstances,
+    updateInstanceMeasurement,
   };
 
   return (

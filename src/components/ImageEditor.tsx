@@ -1,8 +1,15 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { useMedidor } from '../context/MedidorContext';
-import type { DrawingPoint, DrawingLine, CropRegion } from '../types';
+import type { DrawingPoint, DrawingLine, CropRegion, InstanceSegment } from '../types';
 import { calculateTotalDistance, drawLine, generateId } from '../utils/drawing';
 import { detectRoots, drawHistogram, type HistogramData } from '../utils/rootDetection';
+import { 
+  performInstanceSegmentation, 
+  generateInstanceColor,
+  extractInstanceSkeleton,
+  type SegmentationResult,
+  type SegmentationConfig
+} from '../utils/sam3Segmentation';
 import styles from './ImageEditor.module.css';
 
 interface ImageEditorProps {
@@ -20,7 +27,16 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
   onCropComplete,
   calibrationUnit 
 }) => {
-  const { getCurrentImage, addMeasurement, updateCalibration, updateCrop, setImages } = useMedidor();
+  const { 
+    getCurrentImage, 
+    addMeasurement, 
+    updateCalibration, 
+    updateCrop, 
+    setImages,
+    addInstances,
+    clearInstances,
+    updateInstanceMeasurement
+  } = useMedidor();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const histogramCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -33,6 +49,16 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
   const [isPanning, setIsPanning] = useState(false);
   const [panStart, setPanStart] = useState<{ x: number; y: number } | null>(null);
   const [isDetecting, setIsDetecting] = useState(false);
+  const [isSegmenting, setIsSegmenting] = useState(false);
+  const [segmentationResult, setSegmentationResult] = useState<SegmentationResult | null>(null);
+  const [showInstancesOverlay, setShowInstancesOverlay] = useState(false);
+  const [segmentationConfig, setSegmentationConfig] = useState<SegmentationConfig>({
+    brightnessPercentile: 0.6,
+    minAspectRatio: 2.5,
+    minArea: 200,
+    maxSolidity: 0.8,
+    minCircularityInverse: 3.0
+  });
   const [hoveredEndpoint, setHoveredEndpoint] = useState<{ measurementId: string; isStart: boolean } | null>(null);
   const [extendingMeasurement, setExtendingMeasurement] = useState<{ measurementId: string; isStart: boolean } | null>(null);
   const [histogram, setHistogram] = useState<HistogramData | null>(null);
@@ -179,6 +205,16 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
     ctx.restore();
   };
 
+  // Helper to convert hex color to RGB
+  const hexToRgb = (hex: string): { r: number; g: number; b: number } => {
+    const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+    return result ? {
+      r: parseInt(result[1], 16),
+      g: parseInt(result[2], 16),
+      b: parseInt(result[3], 16)
+    } : { r: 255, g: 0, b: 255 };
+  };
+
   // Helper to check if mouse is near a point
   const isNearPoint = (px: number, py: number, point: DrawingPoint, threshold: number = 12) => {
     const dx = px - point.x;
@@ -284,8 +320,78 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
             ctx.fillText(label, cx + 6, cy - 6);
             ctx.restore();
           }
+        } else if (measurement.type === 'instance') {
+          // Draw instance measurements with their associated color
+          const instance = currentImage.instances?.find(inst => inst.id === measurement.instanceId);
+          const color = instance?.color || '#FF00FF';
+          drawLine(ctx, measurement.points, color, 2);
+
+          // Draw label
+          if (measurement.points.length > 0) {
+            let sx = 0;
+            let sy = 0;
+            for (const p of measurement.points) {
+              sx += p.x;
+              sy += p.y;
+            }
+            const cx = sx / measurement.points.length;
+            const cy = sy / measurement.points.length;
+
+            const label = `I${idx + 1}`;
+            ctx.save();
+            ctx.font = '14px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial';
+            ctx.textBaseline = 'middle';
+            ctx.lineWidth = 4;
+            ctx.strokeStyle = 'white';
+            ctx.fillStyle = color;
+            ctx.strokeText(label, cx + 6, cy - 6);
+            ctx.fillText(label, cx + 6, cy - 6);
+            ctx.restore();
+          }
         }
       });
+
+      // Draw instance segmentation masks if available
+      if (currentImage.instances && currentImage.instances.length > 0) {
+        currentImage.instances.forEach((instance) => {
+          // Draw instance mask with transparency
+          const maskCanvas = document.createElement('canvas');
+          maskCanvas.width = instance.width;
+          maskCanvas.height = instance.height;
+          const maskCtx = maskCanvas.getContext('2d');
+          
+          if (maskCtx) {
+            const imageData = maskCtx.createImageData(instance.width, instance.height);
+            
+            // Apply color to mask
+            const rgb = hexToRgb(instance.color);
+            for (let i = 0; i < instance.mask.length; i++) {
+              const pixelIdx = i * 4;
+              if (instance.mask[i] === 255) {
+                imageData.data[pixelIdx] = rgb.r;
+                imageData.data[pixelIdx + 1] = rgb.g;
+                imageData.data[pixelIdx + 2] = rgb.b;
+                imageData.data[pixelIdx + 3] = 100; // Semi-transparent
+              }
+            }
+            
+            maskCtx.putImageData(imageData, 0, 0);
+            ctx.drawImage(maskCanvas, 0, 0);
+          }
+
+          // Draw bounding box
+          ctx.save();
+          ctx.strokeStyle = instance.color;
+          ctx.lineWidth = 2 / viewScale;
+          ctx.strokeRect(instance.bbox.x, instance.bbox.y, instance.bbox.width, instance.bbox.height);
+          
+          // Draw instance label
+          ctx.font = `${12 / viewScale}px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial`;
+          ctx.fillStyle = instance.color;
+          ctx.fillText(`Root ${instance.id.split('_')[1]}`, instance.bbox.x + 5, instance.bbox.y - 5);
+          ctx.restore();
+        });
+      }
 
       // Draw detected lines (in cyan/magenta to differentiate from manual measurements)
       if (detectedLines && detectedLines.length > 0) {
@@ -728,6 +834,120 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
     setDetectedLines([]);
   };
 
+  // Handler for instance segmentation
+  const handleInstanceSegmentation = async () => {
+    if (!canvasRef.current || !currentImage || isSegmenting) return;
+    
+    setIsSegmenting(true);
+    setShowInstancesOverlay(false);
+    
+    try {
+      // Use cropped image if available, otherwise use original
+      const imageDataUrl = currentImage.crop ? currentImage.crop.croppedDataUrl : currentImage.dataUrl;
+      const imageWidth = currentImage.crop ? currentImage.crop.width : currentImage.width;
+      const imageHeight = currentImage.crop ? currentImage.crop.height : currentImage.height;
+      
+      // Create temporary canvas with the image
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = imageWidth;
+      tempCanvas.height = imageHeight;
+      const tempCtx = tempCanvas.getContext('2d');
+      
+      if (!tempCtx) throw new Error('Could not create temporary canvas');
+      
+      // Load and draw the image
+      const img = new Image();
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => {
+          tempCtx.drawImage(img, 0, 0);
+          resolve();
+        };
+        img.onerror = reject;
+        img.src = imageDataUrl;
+      });
+      
+      // Get image data
+      const imageData = tempCtx.getImageData(0, 0, imageWidth, imageHeight);
+      
+      // Perform instance segmentation
+      console.log('Starting instance segmentation with SAM...');
+      const result = await performInstanceSegmentation(imageData, true, segmentationConfig);
+      console.log(`Segmentation complete: ${result.totalInstances} instances found in ${result.processingTime.toFixed(2)}ms`);
+      
+      // Convert instances to the format needed for the context
+      const instances: InstanceSegment[] = result.instances.map((inst, idx) => ({
+        id: inst.id,
+        imageId: currentImage.id,
+        mask: inst.mask,
+        width: inst.width,
+        height: inst.height,
+        bbox: inst.bbox,
+        area: inst.area,
+        centroid: inst.centroid,
+        confidence: inst.confidence,
+        color: generateInstanceColor(idx),
+        timestamp: Date.now()
+      }));
+      
+      // Add instances to the image
+      addInstances(currentImage.id, instances);
+      setSegmentationResult(result);
+      setShowInstancesOverlay(true);
+      
+    } catch (error) {
+      console.error('Error in instance segmentation:', error);
+      alert('Error al segmentar la imagen');
+    } finally {
+      setIsSegmenting(false);
+    }
+  };
+
+  const handleCloseInstancesOverlay = () => {
+    setShowInstancesOverlay(false);
+    setSegmentationResult(null);
+  };
+
+  const handleCreateMeasurementsFromInstances = () => {
+    if (!currentImage || !currentImage.instances || currentImage.instances.length === 0) return;
+    
+    const newMeasurements = [...currentImage.measurements];
+    
+    currentImage.instances.forEach((instance) => {
+      // Extract skeleton points from the instance mask
+      const skeletonPoints = extractInstanceSkeleton(instance);
+      
+      if (skeletonPoints.length >= 2) {
+        const measurement: DrawingLine = {
+          id: generateId(),
+          imageId: currentImage.id,
+          type: 'instance' as const,
+          points: skeletonPoints,
+          pixelLength: calculateTotalDistance(skeletonPoints),
+          timestamp: Date.now(),
+          instanceId: instance.id
+        };
+        
+        addMeasurement(currentImage.id, measurement);
+        updateInstanceMeasurement(currentImage.id, instance.id, measurement);
+        newMeasurements.push(measurement);
+      }
+    });
+    
+    saveToHistory(newMeasurements);
+    setShowInstancesOverlay(false);
+    alert(`Se crearon ${currentImage.instances.length} mediciones a partir de las instancias detectadas`);
+  };
+
+  const handleClearInstances = () => {
+    if (!currentImage) return;
+    
+    if (confirm('¿Deseas eliminar todas las instancias segmentadas?')) {
+      clearInstances(currentImage.id);
+      setSegmentationResult(null);
+      setShowInstancesOverlay(false);
+    }
+  };
+
   const handleAddDetectedMeasurements = () => {
     if (!detectedLines || detectedLines.length === 0 || !currentImage) return;
 
@@ -838,10 +1058,19 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
         <button 
           className={styles.toolbarButton} 
           onClick={handleAutoDetect}
-          disabled={isDetecting || isCalibrationMode || isCropMode}
+          disabled={isDetecting || isCalibrationMode || isCropMode || isSegmenting}
           title="Detectar raíces automáticamente"
         >
           {isDetecting ? '⏳ Analizando...' : '🔍 Detectar raíces'}
+        </button>
+        <button 
+          className={styles.toolbarButton} 
+          onClick={handleInstanceSegmentation}
+          disabled={isSegmenting || isDetecting || isCalibrationMode || isCropMode}
+          title="Segmentar instancias individuales con SAM"
+          style={{ marginLeft: '8px' }}
+        >
+          {isSegmenting ? '⏳ Segmentando...' : '🎯 Segmentar raíces'}
         </button>
       </div>
       <div className={styles.canvasContainer} ref={containerRef}>
@@ -887,6 +1116,117 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
                 >
                   ✓ Agregar como mediciones
                 </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showInstancesOverlay && segmentationResult && currentImage.instances && (
+        <div className={styles.histogramOverlay}>
+          <div className={styles.histogramPanel}>
+            <div className={styles.histogramHeader}>
+              <h3>Instancias segmentadas</h3>
+              <button 
+                className={styles.closeButton} 
+                onClick={handleCloseInstancesOverlay}
+                title="Cerrar"
+              >
+                ✕
+              </button>
+            </div>
+            <div className={styles.analysisGrid}>
+              <div className={styles.analysisSection}>
+                <h4>Raíces encontradas: {segmentationResult.totalInstances}</h4>
+                <p className={styles.histogramInfo}>
+                  Tiempo de procesamiento: {segmentationResult.processingTime.toFixed(2)}ms
+                </p>
+                <p className={styles.histogramInfo}>
+                  Se han detectado {segmentationResult.totalInstances} instancias individuales. Las máscaras de segmentación se muestran superpuestas en la imagen.
+                </p>
+                
+                {/* Settings Panel */}
+                <div style={{ marginTop: '16px', padding: '12px', backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: '4px' }}>
+                  <h4 style={{ marginBottom: '8px' }}>⚙️ Configuración de detección</h4>
+                  <p style={{ fontSize: '0.85em', marginBottom: '12px', opacity: 0.8 }}>
+                    Ajusta estos parámetros y vuelve a segmentar para mejorar la detección
+                  </p>
+                  
+                  <div style={{ display: 'grid', gap: '8px' }}>
+                    <label style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.9em' }}>
+                      <span>Min. Aspect Ratio (elongación):</span>
+                      <input 
+                        type="number" 
+                        step="0.1" 
+                        value={segmentationConfig.minAspectRatio}
+                        onChange={(e) => setSegmentationConfig({...segmentationConfig, minAspectRatio: parseFloat(e.target.value)})}
+                        style={{ width: '60px', padding: '2px 4px' }}
+                      />
+                    </label>
+                    
+                    <label style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.9em' }}>
+                      <span>Min. Área (píxeles):</span>
+                      <input 
+                        type="number" 
+                        step="50" 
+                        value={segmentationConfig.minArea}
+                        onChange={(e) => setSegmentationConfig({...segmentationConfig, minArea: parseInt(e.target.value)})}
+                        style={{ width: '60px', padding: '2px 4px' }}
+                      />
+                    </label>
+                    
+                    <label style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.9em' }}>
+                      <span>Brillo (0-1):</span>
+                      <input 
+                        type="number" 
+                        step="0.05" 
+                        min="0" 
+                        max="1" 
+                        value={segmentationConfig.brightnessPercentile}
+                        onChange={(e) => setSegmentationConfig({...segmentationConfig, brightnessPercentile: parseFloat(e.target.value)})}
+                        style={{ width: '60px', padding: '2px 4px' }}
+                      />
+                    </label>
+                  </div>
+                </div>
+                
+                <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
+                  <button 
+                    className={styles.addMeasurementsButton}
+                    onClick={handleCreateMeasurementsFromInstances}
+                  >
+                    ✓ Crear mediciones
+                  </button>
+                  <button 
+                    className={styles.addMeasurementsButton}
+                    onClick={handleClearInstances}
+                    style={{ backgroundColor: '#d32f2f' }}
+                  >
+                    ✕ Limpiar instancias
+                  </button>
+                </div>
+                <div style={{ marginTop: '16px' }}>
+                  <h4>Instancias detectadas:</h4>
+                  <div style={{ maxHeight: '200px', overflowY: 'auto', marginTop: '8px' }}>
+                    {currentImage.instances.map((instance, idx) => (
+                      <div 
+                        key={instance.id} 
+                        style={{ 
+                          padding: '8px', 
+                          borderLeft: `4px solid ${instance.color}`,
+                          marginBottom: '4px',
+                          backgroundColor: 'rgba(255,255,255,0.05)'
+                        }}
+                      >
+                        <strong>Raíz {idx + 1}</strong>
+                        <div style={{ fontSize: '0.85em', marginTop: '4px' }}>
+                          Área: {instance.area} píxeles | 
+                          Confianza: {(instance.confidence * 100).toFixed(1)}%
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               </div>
             </div>
           </div>

@@ -16,9 +16,30 @@ export interface DrawingLine {
   id: string;
   points: DrawingPoint[];
   imageId: string;
-  type: 'measurement' | 'calibration';
+  type: 'measurement' | 'calibration' | 'instance';
   pixelLength?: number;
   realLength?: number;
+  timestamp: number;
+  instanceId?: string; // Link to instance segment
+}
+
+export interface InstanceSegment {
+  id: string;
+  imageId: string;
+  mask: Uint8ClampedArray;
+  width: number;
+  height: number;
+  bbox: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+  area: number;
+  centroid: DrawingPoint;
+  confidence: number;
+  color: string;
+  measurement?: DrawingLine; // Associated measurement line
   timestamp: number;
 }
 
@@ -38,6 +59,7 @@ export interface LoadedImage {
   measurements: DrawingLine[];
   calibration?: ImageCalibration;
   crop?: CropRegion;
+  instances?: InstanceSegment[]; // Segmented root instances
   timestamp: number;
 }
 
