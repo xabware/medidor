@@ -7,6 +7,7 @@
   justify-content: center;
   overflow: hidden;
   min-height: 0;
+  position: relative;
 }
 
 .embeddingsBtn {
@@ -57,4 +58,30 @@
   box-shadow: var(--shadow);
   width: 100%;
   height: 100%;
+}
+
+/* Active mode toggle (root tracing) */
+.activeMode {
+  background-color: var(--color-teal) !important;
+  color: white !important;
+  border-color: var(--color-teal) !important;
+}
+.activeMode:hover:not(:disabled) { filter: brightness(1.1); }
+
+/* Overlay shown while SAM is processing */
+.processingOverlay {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(0, 0, 0, 0.75);
+  color: white;
+  padding: 12px 24px;
+  border-radius: var(--radius-sm);
+  font-size: 0.9rem;
+  font-weight: 500;
+  z-index: 10;
+  pointer-events: none;
+  white-space: nowrap;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.3);
 }

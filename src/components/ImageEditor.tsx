@@ -2,7 +2,8 @@ import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react'
 import { useMedidor } from '../context/useMedidor';
 import type { DrawingPoint, DrawingLine, ROIRegion } from '../types';
 import { calculateTotalDistance, drawLine, generateId } from '../utils/drawing';
-import { getOrComputeEmbeddings, getLoadedModelId } from '../utils/samSegmentation';
+import { getOrComputeEmbeddings, getLoadedModelId, refineDrawnPath, autoDetectRoots } from '../utils/samSegmentation';
+import { setDebugROIImageUrl, setDebugEnabled } from '../utils/samDebugVisualizer';
 import styles from './ImageEditor.module.css';
 
 /** Crop a data-URL image to the given ROI and return a new data-URL. */
@@ -62,6 +63,13 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
   // Embeddings computation state
   const [embeddingsProgress, setEmbeddingsProgress] = useState<number | null>(null);
   const [isComputingEmbeddings, setIsComputingEmbeddings] = useState(false);
+  // Root-tracing & auto-scan state
+  const [isRootTracingMode, setIsRootTracingMode] = useState(false);
+  const [isAutoScanning, setIsAutoScanning] = useState(false);
+  const [autoScanProgress, setAutoScanProgress] = useState(0);
+  const [autoScanMsg, setAutoScanMsg] = useState('');
+  const [isRefining, setIsRefining] = useState(false);
+  const [debugMode, setDebugMode] = useState(false);
   // View transform state (zoom & pan)
   const [viewScale, setViewScale] = useState(1);
   const [offsetX, setOffsetX] = useState(0);
@@ -89,6 +97,8 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
     setEmbeddingsProgress(0);
     try {
       const croppedDataUrl = await cropImageToROI(currentImage.dataUrl, currentImage.samROI);
+      // Store the ROI image URL for debug visualizer
+      setDebugROIImageUrl(croppedDataUrl);
       await getOrComputeEmbeddings(currentImage.id, croppedDataUrl, (progress: number) => {
         setEmbeddingsProgress(progress);
       });
@@ -366,8 +376,8 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
 
       // Draw current drawing
       if (currentPoints.length > 0) {
-        const color = isCalibrationMode ? '#0000FF' : '#FF0000';
-        drawLine(ctx, currentPoints, color, 2);
+        const color = isCalibrationMode ? '#0000FF' : (isRootTracingMode ? '#00897b' : '#FF0000');
+        drawLine(ctx, currentPoints, color, isRootTracingMode ? 3 : 2);
       }
 
       // Draw stored ROI rectangle
@@ -411,7 +421,7 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
       };
       img.src = currentImage.dataUrl;
     }
-  }, [currentImage, currentPoints, isCalibrationMode, viewScale, offsetX, offsetY, canvasWidth, canvasHeight, hoveredEndpoint, drawEndpoint, roiStart, roiCurrent]);
+  }, [currentImage, currentPoints, isCalibrationMode, isRootTracingMode, viewScale, offsetX, offsetY, canvasWidth, canvasHeight, hoveredEndpoint, drawEndpoint, roiStart, roiCurrent]);
 
   // Reset view when image changes (defer to next frame)
   const currentImageId = currentImage?.id;
@@ -439,8 +449,49 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
     };
   };
 
+  // Auto-scan handler
+  const handleAutoScan = useCallback(async () => {
+    if (!currentImage || !currentImage.samROI || !embeddingsReady || isAutoScanning || isRefining) return;
+    setIsAutoScanning(true);
+    setAutoScanProgress(0);
+    setAutoScanMsg('');
+    try {
+      const centerlines = await autoDetectRoots(
+        currentImage.id,
+        currentImage.samROI,
+        (pct, msg) => { setAutoScanProgress(pct); setAutoScanMsg(msg); },
+      );
+      if (centerlines.length === 0) {
+        alert('No se detectaron raíces en el ROI');
+        return;
+      }
+      const newMeasurements: DrawingLine[] = centerlines.map(points => ({
+        id: generateId(),
+        points,
+        imageId: currentImage.id,
+        type: 'measurement' as const,
+        pixelLength: calculateTotalDistance(points),
+        timestamp: Date.now(),
+      }));
+      const allMeasurements = [...currentImage.measurements, ...newMeasurements];
+      setImages(prev => prev.map(img =>
+        img.id === currentImage.id ? { ...img, measurements: allMeasurements } : img
+      ));
+      saveToHistory(currentImage.id, allMeasurements, history, historyIndex);
+      setPrevMeasurementsStr(JSON.stringify(allMeasurements));
+    } catch (err) {
+      console.error('Auto-scan error:', err);
+      alert('Error en auto-escaneo: ' + (err as Error).message);
+    } finally {
+      setIsAutoScanning(false);
+      setAutoScanProgress(0);
+      setAutoScanMsg('');
+    }
+  }, [currentImage, embeddingsReady, isAutoScanning, isRefining, setImages, saveToHistory, history, historyIndex, setPrevMeasurementsStr]);
+
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!canvasRef.current || !currentImage) return;
+    if (isRefining || isAutoScanning) return;
 
     const { x, y } = getCanvasCoords(e);
     const p = toImageCoords(x, y);
@@ -460,8 +511,8 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
       return;
     }
 
-    // Check if clicking on an endpoint (only in measurement mode)
-    if (!isCalibrationMode) {
+    // Check if clicking on an endpoint (only in measurement mode, not root tracing)
+    if (!isCalibrationMode && !isRootTracingMode) {
       for (const measurement of currentImage.measurements) {
         if (measurement.type === 'measurement' && measurement.points.length > 0) {
           const startPoint = measurement.points[0];
@@ -513,8 +564,8 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
       return;
     }
 
-    // Update hover state (only in measurement mode when not drawing)
-    if (!isDrawing && !isCalibrationMode && currentImage) {
+    // Update hover state (only in measurement mode when not drawing, not root tracing)
+    if (!isDrawing && !isCalibrationMode && !isRootTracingMode && currentImage) {
       let foundHover = false;
       for (const measurement of currentImage.measurements) {
         if (measurement.type === 'measurement' && measurement.points.length > 0) {
@@ -640,10 +691,24 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
       saveToHistory(currentImage.id, updatedMeasurements, history, historyIndex);
       setPrevMeasurementsStr(JSON.stringify(updatedMeasurements));
     } else {
-      const pixelLength = calculateTotalDistance(currentPoints);
+      /* --- SAM refinement when in root-tracing mode --- */
+      let finalPoints = currentPoints;
+      if (isRootTracingMode && embeddingsReady && currentImage.samROI) {
+        setIsRefining(true);
+        try {
+          const refined = await refineDrawnPath(currentImage.id, currentPoints, currentImage.samROI);
+          if (refined && refined.length >= 2) finalPoints = refined;
+        } catch (err) {
+          console.warn('SAM refinement failed, using original path:', err);
+        } finally {
+          setIsRefining(false);
+        }
+      }
+
+      const pixelLength = calculateTotalDistance(finalPoints);
       const measurement: DrawingLine = {
         id: generateId(),
-        points: currentPoints,
+        points: finalPoints,
         imageId: currentImage.id,
         type: 'measurement',
         pixelLength,
@@ -712,6 +777,11 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
           🔲 Modo ROI: Arrastra para definir la región de interés
         </div>
       )}
+      {isRootTracingMode && !isCalibrationMode && !isROIMode && (
+        <div className={styles.calibrationBanner} style={{ backgroundColor: 'rgba(0, 137, 123, 0.15)', borderColor: '#00897b' }}>
+          🌱 Modo trazado de raíz: Dibuja sobre la raíz y SAM la refinará automáticamente
+        </div>
+      )}
       <div className={styles.toolbar}>
         <button className={styles.toolbarButton} onClick={handleResetView} title="Restablecer vista (zoom/pan) - Atajo: R">
           Restablecer zoom
@@ -738,6 +808,34 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
         )}
         {/* Spacer to push embeddings button to the right */}
         <div style={{ flex: 1 }} />
+        {/* Root-tracing & auto-scan — only when embeddings are ready */}
+        {embeddingsReady && (
+          <>
+            <button
+              className={`${styles.toolbarButton} ${isRootTracingMode ? styles.activeMode : ''}`}
+              onClick={() => setIsRootTracingMode(v => !v)}
+              disabled={isAutoScanning || isRefining}
+              title="Trazar raíz: dibuja sobre la raíz y SAM la refinará"
+            >
+              🌱 Trazar
+            </button>
+            <button
+              className={styles.toolbarButton}
+              onClick={handleAutoScan}
+              disabled={isAutoScanning || isRefining}
+              title="Escanear automáticamente el ROI buscando raíces"
+            >
+              {isAutoScanning ? `⏳ ${autoScanProgress}%` : '🔍 Auto'}
+            </button>
+            <button
+              className={`${styles.toolbarButton} ${debugMode ? styles.activeMode : ''}`}
+              onClick={() => { const next = !debugMode; setDebugMode(next); setDebugEnabled(next); }}
+              title="Abrir/cerrar ventana de debug SAM (muestra imágenes, puntos y máscaras)"
+            >
+              🐛 Debug
+            </button>
+          </>
+        )}
         {/* Embeddings button — right side of toolbar */}
         {samModelId && currentImage.samROI && !embeddingsReady && (
           <button
@@ -764,13 +862,22 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
           onMouseLeave={handleMouseUp}
           onContextMenu={(e) => e.preventDefault()}
           style={{ 
-            cursor: isROIMode
+            cursor: (isRefining || isAutoScanning)
+              ? 'wait'
+              : isROIMode
               ? 'crosshair'
               : isCalibrationMode
-              ? 'crosshair' 
+              ? 'crosshair'
+              : isRootTracingMode
+              ? 'crosshair'
               : (isPanning ? 'grabbing' : (isDrawing ? 'crosshair' : (hoveredEndpoint ? 'grab' : 'default')))
           }}
         />
+        {(isRefining || isAutoScanning) && (
+          <div className={styles.processingOverlay}>
+            {isRefining ? '🔄 Refinando con SAM…' : `🔍 ${autoScanMsg || 'Escaneando…'}`}
+          </div>
+        )}
       </div>
     </div>
   );
