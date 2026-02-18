@@ -72,16 +72,3 @@ export function drawLine(
 
   ctx.stroke();
 }
-
-export function drawPoint(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  radius: number = 3,
-  fillStyle: string = '#FF0000'
-): void {
-  ctx.fillStyle = fillStyle;
-  ctx.beginPath();
-  ctx.arc(x, y, radius, 0, 2 * Math.PI);
-  ctx.fill();
-}

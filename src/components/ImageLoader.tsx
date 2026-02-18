@@ -8,13 +8,9 @@ interface ImageLoaderProps {
   onCancelCalibration: () => void;
   isCalibrationMode: boolean;
   calibrationUnit: string;
-  /** Currently loaded SAM model ID (null = no model loaded) */
   samModelId: string | null;
-  /** Max resolution for loaded images (null = original) */
   maxResolution: number | null;
-  /** Whether the editor is currently in ROI selection mode */
   isROIMode: boolean;
-  /** Called to enter ROI selection mode */
   onStartROI: () => void;
 }
 
@@ -28,9 +24,11 @@ export const ImageLoader: React.FC<ImageLoaderProps> = ({
   isROIMode,
   onStartROI,
 }) => {
-  const { images, addImages, removeImage, setCurrentImage, currentImageId } = useMedidor();
+  const { images, addImages, removeImage, setCurrentImage, currentImageId, renameImage } = useMedidor();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [editingImageId, setEditingImageId] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState('');
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
@@ -83,6 +81,19 @@ export const ImageLoader: React.FC<ImageLoaderProps> = ({
     setCurrentImage(image.id);
     onStartROI();
   }, [samModelId, isROIMode, setCurrentImage, onStartROI]);
+
+  // Inline rename
+  const startEditing = (image: LoadedImage) => {
+    setEditingImageId(image.id);
+    setEditValue(image.displayName ?? image.file.name);
+  };
+
+  const commitRename = () => {
+    if (editingImageId && editValue.trim()) {
+      renameImage(editingImageId, editValue);
+    }
+    setEditingImageId(null);
+  };
 
   return (
     <div className={styles.loader}>
@@ -140,13 +151,36 @@ export const ImageLoader: React.FC<ImageLoaderProps> = ({
               >
                 <img src={image.dataUrl} alt="thumbnail" className={styles.thumbnail} />
                 <div className={styles.imageInfo}>
-                  <p className={styles.fileName}>
-                    {image.file.name}
-                    {embReady && <span className={`${styles.badge} ${styles.badgeAI}`}>🧠 IA</span>}
-                    {embStale && <span className={`${styles.badge} ${styles.badgeStale}`}>🧠 ⚠</span>}
-                    {isCompressed && <span className={`${styles.badge} ${styles.badgeCompress}`}>📐</span>}
-                    {image.samROI && <span className={`${styles.badge} ${styles.badgeAI}`}>🔲 ROI</span>}
-                  </p>
+                  {editingImageId === image.id ? (
+                    <input
+                      className={styles.renameInput}
+                      value={editValue}
+                      onChange={(e) => setEditValue(e.target.value)}
+                      onBlur={commitRename}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') commitRename();
+                        if (e.key === 'Escape') setEditingImageId(null);
+                      }}
+                      autoFocus
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  ) : (
+                    <div className={styles.fileNameRow}>
+                      <p className={styles.fileName}>
+                        {image.displayName ?? image.file.name}
+                        {embReady && <span className={`${styles.badge} ${styles.badgeAI}`}>🧠 IA</span>}
+                        {embStale && <span className={`${styles.badge} ${styles.badgeStale}`}>🧠 ⚠</span>}
+                        {image.samROI && <span className={`${styles.badge} ${styles.badgeAI}`}>🔲 ROI</span>}
+                      </p>
+                      <button
+                        className={styles.editNameBtn}
+                        onClick={(e) => { e.stopPropagation(); startEditing(image); }}
+                        title="Renombrar imagen"
+                      >
+                        ✏️
+                      </button>
+                    </div>
+                  )}
                   <p className={styles.fileSize}>{(image.file.size / 1024).toFixed(1)} KB</p>
                   <p className={styles.dimensions}>
                     {isCompressed ? `${image.originalWidth}×${image.originalHeight} → ` : ''}

@@ -5,7 +5,7 @@ import { calculateTotalDistance, drawLine, generateId } from '../utils/drawing';
 import { getOrComputeEmbeddings, getLoadedModelId } from '../utils/samSegmentation';
 import styles from './ImageEditor.module.css';
 
-/** Crop a data-URL image to the given ROI and return a new data-URL */
+/** Crop a data-URL image to the given ROI and return a new data-URL. */
 function cropImageToROI(dataUrl: string, roi: ROIRegion): Promise<string> {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -32,11 +32,8 @@ interface ImageEditorProps {
   isCalibrationMode: boolean;
   onCalibrationComplete: () => void;
   calibrationUnit: string;
-  /** Currently loaded SAM model ID (null = no model loaded) */
   samModelId: string | null;
-  /** Whether the editor is in ROI selection mode */
   isROIMode: boolean;
-  /** Called when the user finishes drawing a ROI rectangle */
   onROIComplete: () => void;
 }
 
@@ -108,11 +105,10 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
     }
   }, [currentImage, samModelId, isComputingEmbeddings, setImages]);
 
-  // ── History (pure state, render-time adjustment pattern) ───────
-  // Save current measurements state to history for the active image
+  // History — render-time adjustment pattern
   const saveToHistory = useCallback((imageId: string, measurements: DrawingLine[], h: DrawingLine[][], hIdx: number) => {
     const newEntries = h.slice(0, hIdx + 1);
-    newEntries.push(JSON.parse(JSON.stringify(measurements)));
+    newEntries.push(structuredClone(measurements));
     if (newEntries.length > 50) newEntries.shift();
     const newIdx = newEntries.length - 1;
     setHistoryMap(prev => {
@@ -122,15 +118,14 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
     });
   }, []);
 
-  // Initialize history when image changes (render-time state adjustment — React recommended pattern)
+  // Initialize history when image changes (render-time state adjustment)
   const [prevImageId, setPrevImageId] = useState<string | undefined>(undefined);
   const [prevMeasurementsStr, setPrevMeasurementsStr] = useState('');
   if (currentImage?.id !== prevImageId) {
     setPrevImageId(currentImage?.id);
     if (currentImage) {
-      // Only init if no history exists yet for this image
       if (!historyMap.has(currentImage.id)) {
-        const init: DrawingLine[][] = [JSON.parse(JSON.stringify(currentImage.measurements))];
+        const init: DrawingLine[][] = [structuredClone(currentImage.measurements)];
         setHistoryMap(prev => {
           const next = new Map(prev);
           next.set(currentImage.id, { entries: init, index: 0 });
@@ -141,14 +136,14 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
     }
   }
 
-  // Track external measurement changes (e.g. panel delete) — render-time adjustment
+  // Track external measurement changes (e.g. panel delete)
   const curMeasurementsJson = currentImage ? JSON.stringify(currentImage.measurements) : '';
   if (currentImage && history.length > 0 && curMeasurementsJson !== prevMeasurementsStr) {
     setPrevMeasurementsStr(curMeasurementsJson);
     const histMeasurements = JSON.stringify(history[historyIndex]);
     if (curMeasurementsJson !== histMeasurements) {
       const newEntries = history.slice(0, historyIndex + 1);
-      newEntries.push(JSON.parse(curMeasurementsJson));
+      newEntries.push(structuredClone(currentImage.measurements));
       if (newEntries.length > 50) newEntries.shift();
       const newIdx = newEntries.length - 1;
       setHistoryMap(prev => {
@@ -167,7 +162,7 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
     setImages((prev) =>
       prev.map((img) =>
         img.id === currentImage.id
-          ? { ...img, measurements: JSON.parse(JSON.stringify(measurements)) }
+          ? { ...img, measurements: structuredClone(measurements) }
           : img
       )
     );
@@ -188,7 +183,7 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
     setImages((prev) =>
       prev.map((img) =>
         img.id === currentImage.id
-          ? { ...img, measurements: JSON.parse(JSON.stringify(measurements)) }
+          ? { ...img, measurements: structuredClone(measurements) }
           : img
       )
     );

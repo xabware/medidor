@@ -1,18 +1,11 @@
 /**
- * SAM (Segment Anything Model) integration for interactive root segmentation.
- * Uses @huggingface/transformers to run SAM inference in the browser.
- *
- * Flow:
- *   1. loadSAMModel(modelId)       – download & init (once per model choice)
- *   2. getOrComputeEmbeddings(id, url) – heavy encoder pass (cached per image)
- *   3. segmentAndMeasure(emb, pt)  – lightweight decoder per click
+ * SAM model loading & embeddings computation.
+ * Uses @huggingface/transformers with ONNX WASM proxy for non-blocking inference.
  */
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-// ── Enable ONNX WASM proxy mode ─────────────────────────────────
-// This runs WASM inference in a background Web Worker, preventing
-// the main thread from blocking (especially critical for large models).
+// Enable ONNX WASM proxy (runs inference in a Web Worker)
 let _proxyConfigured = false;
 async function ensureWasmProxy() {
   if (_proxyConfigured) return;
@@ -25,7 +18,7 @@ async function ensureWasmProxy() {
   _proxyConfigured = true;
 }
 
-// ── Module-level singletons ──────────────────────────────────────
+// Module-level singletons
 let model: any = null;
 let processor: any = null;
 let loadPromise: Promise<void> | null = null;
@@ -41,7 +34,7 @@ async function getRawImage() {
 // Embeddings cache: "modelId::imageId" → SAMEmbeddings
 const embeddingsCache = new Map<string, SAMEmbeddings>();
 
-// ── Model catalogue ──────────────────────────────────────────────
+// Model catalogue
 export interface SAMModelInfo {
   id: string;
   name: string;
@@ -70,7 +63,7 @@ export const SAM_MODELS: SAMModelInfo[] = [
   },
 ];
 
-// ── Device detection ─────────────────────────────────────────────
+// Device detection────
 export interface DeviceSpecs {
   cpuCores: number;
   ramGB: number | null;          // navigator.deviceMemory (Chrome only)
@@ -99,7 +92,7 @@ export function getDeviceSpecs(): DeviceSpecs {
   return { cpuCores, ramGB, gpu, webGPU };
 }
 
-// ── Public types ─────────────────────────────────────────────────
+// Public types────
 export interface SAMProgressInfo {
   status: string;
   progress?: number;
@@ -112,7 +105,7 @@ export interface SAMEmbeddings {
   modelId: string;
 }
 
-// ── Model lifecycle ──────────────────────────────────────────────
+// Model lifecycle────
 
 export async function loadSAMModel(
   modelId: string,
@@ -205,7 +198,7 @@ export function getLoadedModelId(): string | null {
   return loadedModelId;
 }
 
-// ── Embeddings ───────────────────────────────────────────────────
+// Embeddings────
 
 export async function getOrComputeEmbeddings(
   imageId: string,
@@ -251,13 +244,11 @@ export async function getOrComputeEmbeddings(
   return emb;
 }
 
-/** Return cached embeddings for the currently loaded model, or null. */
 export function getCachedEmbeddings(imageId: string): SAMEmbeddings | null {
   if (!loadedModelId) return null;
   return embeddingsCache.get(`${loadedModelId}::${imageId}`) ?? null;
 }
 
-/** Check if embeddings are cached for a given image + currently loaded model. */
 export function hasEmbeddingsFor(imageId: string): boolean {
   if (!loadedModelId) return false;
   return embeddingsCache.has(`${loadedModelId}::${imageId}`);

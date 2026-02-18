@@ -18,7 +18,7 @@ function AppContent() {
   const calibrationUnit = 'cm';
   const { images, setImages, currentImageId, setCurrentImage } = useMedidor();
 
-  // ── Save / Load project ────────────────────────────────────────
+  // Save / Load project
   const handleSave = useCallback(() => {
     saveProject(images, currentImageId, maxResolution);
   }, [images, currentImageId, maxResolution]);
@@ -40,17 +40,14 @@ function AppContent() {
   const handleResolutionChange = useCallback(async (newMaxDim: number | null) => {
     setMaxResolution(newMaxDim);
 
-    // Reprocess all existing images with the new resolution
-    const updated = [];
-    for (const img of images) {
-      // Get the original source (either stored original or current)
+    // Reprocess all existing images with the new resolution (parallel)
+    const updated = await Promise.all(images.map(async (img) => {
       const srcUrl = img.originalDataUrl ?? img.dataUrl;
       const srcW = img.originalWidth ?? img.width;
       const srcH = img.originalHeight ?? img.height;
 
       if (newMaxDim === null || (srcW <= newMaxDim && srcH <= newMaxDim)) {
-        // Use original (no downscale needed)
-        updated.push({
+        return {
           ...img,
           dataUrl: srcUrl,
           width: srcW,
@@ -59,12 +56,11 @@ function AppContent() {
           originalWidth: undefined,
           originalHeight: undefined,
           embeddingsModelId: img.dataUrl !== srcUrl ? undefined : img.embeddingsModelId,
-        });
+        };
       } else {
-        // Downscale to requested resolution
         const result = await compressImage(srcUrl, newMaxDim);
         const changed = result.dataUrl !== img.dataUrl;
-        updated.push({
+        return {
           ...img,
           originalDataUrl: srcUrl,
           originalWidth: srcW,
@@ -73,9 +69,9 @@ function AppContent() {
           width: result.width,
           height: result.height,
           embeddingsModelId: changed ? undefined : img.embeddingsModelId,
-        });
+        };
       }
-    }
+    }));
     setImages(updated);
   }, [images, setImages]);
 

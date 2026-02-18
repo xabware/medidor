@@ -37,22 +37,11 @@ export interface LoadedImage {
   measurements: DrawingLine[];
   calibration?: ImageCalibration;
   timestamp: number;
-  /** Model ID for which embeddings have been computed */
+  /** Custom display name (overrides file.name when set) */
+  displayName?: string;
   embeddingsModelId?: string;
-  /** ROI for SAM embeddings (image-space coords) */
   samROI?: ROIRegion;
-  /** Original image before auto-compression (stored for toggle restore) */
   originalDataUrl?: string;
   originalWidth?: number;
   originalHeight?: number;
-}
-
-export interface MeasurementData extends Record<string, string | number> {
-  imageFileName: string;
-  measurement: string;
-  pixelLength: number;
-  calibrationFactor: number;
-  realLength: number;
-  unit: string;
-  timestamp: string;
 }

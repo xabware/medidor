@@ -1,12 +1,7 @@
 /**
- * Save / Load project state as a `.raiz` file.
- *
- * The file is a gzipped JSON blob containing every LoadedImage
- * (data-URLs, measurements, calibrations, ROIs, embeddings metadata).
- *
- * Embeddings tensors themselves are NOT saved (too large & model-specific).
- * Only the `embeddingsModelId` flag is stored so the UI knows whether
- * to recompute.
+ * Save / Load `.raiz` project files.
+ * Serialises images (data-URLs, measurements, calibrations, ROIs) to JSON.
+ * Embeddings tensors are NOT saved — only the embeddingsModelId flag.
  */
 
 import type { LoadedImage } from '../types';
@@ -29,6 +24,7 @@ interface SerialisedImage {
   originalDataUrl?: string;
   originalWidth?: number;
   originalHeight?: number;
+  displayName?: string;
 }
 
 interface ProjectFile {
@@ -39,9 +35,8 @@ interface ProjectFile {
   images: SerialisedImage[];
 }
 
-// ── Helpers ──────────────────────────────────────────────────────
+// Helpers
 
-/** Create a minimal File-like object from serialised metadata + dataUrl */
 function rehydrateFile(s: SerialisedImage): File {
   // Convert data-URL to Blob so we can build a real File
   const arr = s.dataUrl.split(',');
@@ -52,7 +47,7 @@ function rehydrateFile(s: SerialisedImage): File {
   return new File([u8], s.fileName, { type: mime });
 }
 
-// ── Public API ───────────────────────────────────────────────────
+// Public API
 
 export function saveProject(
   images: LoadedImage[],
@@ -75,6 +70,7 @@ export function saveProject(
     originalDataUrl: img.originalDataUrl,
     originalWidth: img.originalWidth,
     originalHeight: img.originalHeight,
+    displayName: img.displayName,
   }));
 
   const project: ProjectFile = {
@@ -138,6 +134,7 @@ export async function loadProject(): Promise<LoadedProject | null> {
           originalDataUrl: s.originalDataUrl,
           originalWidth: s.originalWidth,
           originalHeight: s.originalHeight,
+          displayName: s.displayName,
         }));
 
         resolve({

@@ -27,7 +27,7 @@ export const MeasurementsPanel: React.FC<MeasurementsPanelProps> = ({ calibratio
       const pixelsPerUnit = image.calibration?.pixelsPerUnit || 1;
       
       const row: Record<string, string | number> = {
-        imageFileName: image.file.name,
+        imageFileName: image.displayName ?? image.file.name,
       };
 
       // Agregar todas las columnas de mediciones (incluso si están vacías)

@@ -65,12 +65,15 @@ export const MedidorProvider: React.FC<{ children: React.ReactNode }> = ({ child
   }, [currentImageId]);
 
   const removeImage = useCallback((imageId: string) => {
-    setImages((prev) => prev.filter((img) => img.id !== imageId));
-    if (currentImageId === imageId) {
-      const remaining = images.filter((img) => img.id !== imageId);
-      setCurrentImageId(remaining.length > 0 ? remaining[0].id : null);
-    }
-  }, [currentImageId, images]);
+    setImages((prev) => {
+      const next = prev.filter((img) => img.id !== imageId);
+      // If the removed image was selected, pick the first remaining (or null)
+      setCurrentImageId((curId) =>
+        curId === imageId ? (next.length > 0 ? next[0].id : null) : curId
+      );
+      return next;
+    });
+  }, []);
 
   const addMeasurement = useCallback((imageId: string, line: DrawingLine) => {
     setImages((prev) =>
@@ -129,6 +132,16 @@ export const MedidorProvider: React.FC<{ children: React.ReactNode }> = ({ child
     );
   }, []);
 
+  const renameImage = useCallback((imageId: string, newName: string) => {
+    const trimmed = newName.trim();
+    if (!trimmed) return;
+    setImages((prev) =>
+      prev.map((img) =>
+        img.id === imageId ? { ...img, displayName: trimmed } : img
+      )
+    );
+  }, []);
+
   const value: MedidorContextType = {
     images,
     currentImageId,
@@ -142,6 +155,7 @@ export const MedidorProvider: React.FC<{ children: React.ReactNode }> = ({ child
     getCurrentImage,
     setImages,
     updateSamROI,
+    renameImage,
   };
 
   return (

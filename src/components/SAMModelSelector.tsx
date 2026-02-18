@@ -13,7 +13,6 @@ import {
 import styles from './SAMModelSelector.module.css';
 
 interface SAMModelSelectorProps {
-  /** Called whenever the model-ready state changes (loaded / unloaded) */
   onModelStateChange?: (ready: boolean, modelId: string | null) => void;
 }
 

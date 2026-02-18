@@ -1,10 +1,4 @@
-/**
- * Image compression utility for reducing SAM processing time.
- * High-resolution phone camera images (e.g. 4000×3000) are downscaled to a
- * maximum dimension while preserving aspect ratio. SAM internally resizes to
- * 1024×1024 anyway, so pre-compressing loses no quality while significantly
- * speeding up image loading and processing.
- */
+/** Downscale an image to fit within `maxDim` pixels, preserving aspect ratio. */
 
 export interface CompressedImage {
   dataUrl: string;
@@ -12,10 +6,6 @@ export interface CompressedImage {
   height: number;
 }
 
-/**
- * Downscale an image so that its longest side is at most `maxDim` pixels.
- * Returns the original if it's already small enough.
- */
 export async function compressImage(
   sourceUrl: string,
   maxDim: number = 1024,

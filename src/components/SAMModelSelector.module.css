@@ -16,6 +16,7 @@
   cursor: pointer;
   max-width: 160px;
   outline: none;
+  transition: border-color var(--transition);
 }
 .selector:focus { border-color: rgba(255, 255, 255, 0.6); }
 .selector option { background: #333; color: white; }
@@ -24,12 +25,12 @@
   background: rgba(255, 255, 255, 0.2);
   color: white;
   border: 1px solid rgba(255, 255, 255, 0.3);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   padding: 6px 14px;
   font-size: 0.85rem;
   font-weight: 500;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all var(--transition);
   white-space: nowrap;
 }
 .loadBtn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.3); border-color: rgba(255, 255, 255, 0.5); }
@@ -66,7 +67,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.2s;
+  transition: all var(--transition);
   padding: 0;
   flex-shrink: 0;
 }
@@ -85,9 +86,9 @@
 }
 
 .infoPanel {
-  background: var(--color-surface, #fff);
-  color: var(--color-text, #222);
-  border-radius: 10px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  border-radius: var(--radius);
   box-shadow: 0 8px 32px rgba(0,0,0,0.25);
   max-width: 520px;
   width: 92%;
@@ -106,20 +107,20 @@
 }
 
 .modelCard {
-  background: #f5f7fb;
-  border: 1px solid #dde3ea;
-  border-radius: 8px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
   padding: 12px 14px;
   margin-bottom: 10px;
 }
 .modelCard:last-child { margin-bottom: 0; }
 .modelCard h4 { margin: 0 0 4px; font-size: 0.95rem; }
-.modelCard p  { margin: 2px 0; font-size: 0.85rem; color: #555; line-height: 1.5; }
+.modelCard p  { margin: 2px 0; font-size: 0.85rem; color: var(--color-text-muted); line-height: 1.5; }
 
 .deviceSection {
   margin-top: 16px;
   padding-top: 14px;
-  border-top: 1px solid #dde3ea;
+  border-top: 1px solid var(--color-border);
 }
 .deviceSection h3 { margin: 0 0 8px; font-size: 1rem; }
 .specsList {
@@ -128,18 +129,19 @@
   padding: 0;
   font-size: 0.85rem;
   line-height: 1.8;
-  color: #444;
+  color: var(--color-text-muted);
 }
 
 .closeInfoBtn {
   display: block;
   margin: 14px auto 0;
-  background: var(--color-primary, #2175f3);
+  background: var(--color-primary);
   color: white;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   padding: 6px 24px;
   font-size: 0.88rem;
   cursor: pointer;
+  transition: opacity var(--transition);
 }
 .closeInfoBtn:hover { opacity: 0.85; }

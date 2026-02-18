@@ -14,6 +14,7 @@ export interface MedidorContextType {
   getCurrentImage: () => LoadedImage | undefined;
   setImages: React.Dispatch<React.SetStateAction<LoadedImage[]>>;
   updateSamROI: (imageId: string, roi: ROIRegion | undefined) => void;
+  renameImage: (imageId: string, newName: string) => void;
 }
 
 export const MedidorContext = createContext<MedidorContextType | undefined>(undefined);
