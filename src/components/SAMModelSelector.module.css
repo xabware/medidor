@@ -1,0 +1,138 @@
+.container {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  margin-right: 12px;
+}
+
+.selector {
+  background: rgba(255,255,255,0.15);
+  color: white;
+  border: 1px solid rgba(255,255,255,0.3);
+  border-radius: 5px;
+  padding: 4px 8px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  max-width: 140px;
+}
+.selector:focus { outline: 1px solid rgba(255,255,255,0.6); }
+
+.loadBtn {
+  background: rgba(255,255,255,0.2);
+  color: white;
+  border: 1px solid rgba(255,255,255,0.35);
+  border-radius: 5px;
+  padding: 4px 10px;
+  font-size: 0.78rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s;
+  white-space: nowrap;
+}
+.loadBtn:hover { background: rgba(255,255,255,0.35); }
+.loadBtn:disabled { opacity: 0.55; cursor: default; }
+
+.loadBtnActive {
+  background: rgba(67,160,71,0.55);
+  border-color: rgba(67,160,71,0.7);
+}
+
+.statusText {
+  font-size: 0.75rem;
+  color: rgba(255,255,255,0.85);
+  white-space: nowrap;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.infoBtn {
+  background: none;
+  border: 1px solid rgba(255,255,255,0.3);
+  color: white;
+  border-radius: 50%;
+  width: 22px;
+  height: 22px;
+  font-size: 0.72rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s;
+  padding: 0;
+  flex-shrink: 0;
+}
+.infoBtn:hover { background: rgba(255,255,255,0.2); }
+
+/* Info panel (popup) */
+.infoOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  background: rgba(0,0,0,0.35);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 70px;
+}
+
+.infoPanel {
+  background: var(--color-surface, #fff);
+  color: var(--color-text, #222);
+  border-radius: 10px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.25);
+  max-width: 520px;
+  width: 92%;
+  padding: 20px 24px;
+  animation: slideDown 0.25s ease;
+}
+
+@keyframes slideDown {
+  from { transform: translateY(-16px); opacity: 0; }
+  to   { transform: translateY(0);     opacity: 1; }
+}
+
+.infoPanel h3 {
+  margin: 0 0 12px;
+  font-size: 1.1rem;
+}
+
+.modelCard {
+  background: #f5f7fb;
+  border: 1px solid #dde3ea;
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin-bottom: 10px;
+}
+.modelCard:last-child { margin-bottom: 0; }
+.modelCard h4 { margin: 0 0 4px; font-size: 0.95rem; }
+.modelCard p  { margin: 2px 0; font-size: 0.85rem; color: #555; line-height: 1.5; }
+
+.deviceSection {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid #dde3ea;
+}
+.deviceSection h3 { margin: 0 0 8px; font-size: 1rem; }
+.specsList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 0.85rem;
+  line-height: 1.8;
+  color: #444;
+}
+
+.closeInfoBtn {
+  display: block;
+  margin: 14px auto 0;
+  background: var(--color-primary, #2175f3);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 24px;
+  font-size: 0.88rem;
+  cursor: pointer;
+}
+.closeInfoBtn:hover { opacity: 0.85; }

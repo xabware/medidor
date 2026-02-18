@@ -1,5 +1,5 @@
-import React, { useRef, useState, useCallback } from 'react';
-import { useMedidor } from '../context/MedidorContext';
+﻿import React, { useRef, useState, useCallback } from 'react';
+import { useMedidor } from '../context/useMedidor';
 import type { LoadedImage } from '../types';
 import styles from './ImageLoader.module.css';
 
@@ -7,20 +7,26 @@ interface ImageLoaderProps {
   onStartCalibration: () => void;
   onCancelCalibration: () => void;
   isCalibrationMode: boolean;
-  onStartCrop: () => void;
-  onCancelCrop: () => void;
-  isCropMode: boolean;
   calibrationUnit: string;
+  /** Currently loaded SAM model ID (null = no model loaded) */
+  samModelId: string | null;
+  /** Max resolution for loaded images (null = original) */
+  maxResolution: number | null;
+  /** Whether the editor is currently in ROI selection mode */
+  isROIMode: boolean;
+  /** Called to enter ROI selection mode */
+  onStartROI: () => void;
 }
 
 export const ImageLoader: React.FC<ImageLoaderProps> = ({ 
   onStartCalibration, 
   onCancelCalibration,
   isCalibrationMode,
-  onStartCrop,
-  onCancelCrop,
-  isCropMode,
-  calibrationUnit 
+  calibrationUnit,
+  samModelId,
+  maxResolution,
+  isROIMode,
+  onStartROI,
 }) => {
   const { images, addImages, removeImage, setCurrentImage, currentImageId } = useMedidor();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -29,7 +35,7 @@ export const ImageLoader: React.FC<ImageLoaderProps> = ({
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
     if (files.length > 0) {
-      await addImages(files);
+      await addImages(files, maxResolution);
     }
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
@@ -38,23 +44,10 @@ export const ImageLoader: React.FC<ImageLoaderProps> = ({
 
   const handleCalibrateClick = (imageId: string) => {
     if (isCalibrationMode) {
-      // Si ya está en modo calibración, cancelar
       onCancelCalibration();
     } else {
-      // Si no está en modo calibración, activarlo
       setCurrentImage(imageId);
       onStartCalibration();
-    }
-  };
-
-  const handleCropClick = (imageId: string) => {
-    if (isCropMode) {
-      // Si ya está en modo recorte, cancelar
-      onCancelCrop();
-    } else {
-      // Si no está en modo recorte, activarlo
-      setCurrentImage(imageId);
-      onStartCrop();
     }
   };
 
@@ -67,7 +60,6 @@ export const ImageLoader: React.FC<ImageLoaderProps> = ({
   const handleDragLeave = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     e.stopPropagation();
-    // Only reset when leaving the dropzone, not when entering child
     if ((e.target as HTMLElement).classList.contains(styles.dropzone)) {
       setIsDragging(false);
     }
@@ -81,9 +73,16 @@ export const ImageLoader: React.FC<ImageLoaderProps> = ({
     const files = Array.from(e.dataTransfer.files || []);
     const imageFiles = files.filter(f => f.type.startsWith('image/'));
     if (imageFiles.length > 0) {
-      await addImages(imageFiles);
+      await addImages(imageFiles, maxResolution);
     }
-  }, [addImages]);
+  }, [addImages, maxResolution]);
+
+  // Enter ROI selection mode for an image
+  const handleDefineROI = useCallback((image: LoadedImage) => {
+    if (!samModelId || isROIMode) return;
+    setCurrentImage(image.id);
+    onStartROI();
+  }, [samModelId, isROIMode, setCurrentImage, onStartROI]);
 
   return (
     <div className={styles.loader}>
@@ -125,7 +124,12 @@ export const ImageLoader: React.FC<ImageLoaderProps> = ({
         {images.length === 0 ? (
           <p className={styles.emptyMessage}>No hay imágenes cargadas</p>
         ) : (
-          images.map((image: LoadedImage) => (
+          images.map((image: LoadedImage) => {
+            const embReady = !!(image.embeddingsModelId && image.embeddingsModelId === samModelId);
+            const embStale = !!(image.embeddingsModelId && image.embeddingsModelId !== samModelId);
+            const isCompressed = !!image.originalDataUrl;
+
+            return (
             <div
               key={image.id}
               className={`${styles.imageItem} ${currentImageId === image.id ? styles.active : ''}`}
@@ -136,14 +140,18 @@ export const ImageLoader: React.FC<ImageLoaderProps> = ({
               >
                 <img src={image.dataUrl} alt="thumbnail" className={styles.thumbnail} />
                 <div className={styles.imageInfo}>
-                  <p className={styles.fileName}>{image.file.name}</p>
+                  <p className={styles.fileName}>
+                    {image.file.name}
+                    {embReady && <span className={`${styles.badge} ${styles.badgeAI}`}>🧠 IA</span>}
+                    {embStale && <span className={`${styles.badge} ${styles.badgeStale}`}>🧠 ⚠</span>}
+                    {isCompressed && <span className={`${styles.badge} ${styles.badgeCompress}`}>📐</span>}
+                    {image.samROI && <span className={`${styles.badge} ${styles.badgeAI}`}>🔲 ROI</span>}
+                  </p>
                   <p className={styles.fileSize}>{(image.file.size / 1024).toFixed(1)} KB</p>
-                  <p className={styles.dimensions}>{image.width} × {image.height}</p>
-                  {image.crop && (
-                    <p className={styles.calibrationInfo} style={{ color: '#9c27b0' }}>
-                      ✂️ Recortada: {image.crop.width} × {image.crop.height}
-                    </p>
-                  )}
+                  <p className={styles.dimensions}>
+                    {isCompressed ? `${image.originalWidth}×${image.originalHeight} → ` : ''}
+                    {image.width} × {image.height}
+                  </p>
                   {image.calibration?.pixelsPerUnit && (
                     <p className={styles.calibrationInfo}>
                       📏 {image.calibration.pixelsPerUnit.toFixed(2)} px/{calibrationUnit}
@@ -152,15 +160,20 @@ export const ImageLoader: React.FC<ImageLoaderProps> = ({
                 </div>
               </div>
               <div className={styles.actions}>
+                {/* ROI define/redefine button */}
                 <button
-                  className={`${styles.cropBtn} ${isCropMode && currentImageId === image.id ? styles.active : ''}`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleCropClick(image.id);
-                  }}
-                  title={isCropMode && currentImageId === image.id ? 'Cancelar recorte' : (image.crop ? 'Recortar de nuevo' : 'Recortar imagen')}
+                  className={`${styles.aiBtn} ${image.samROI ? styles.ready : ''}`}
+                  onClick={(e) => { e.stopPropagation(); handleDefineROI(image); }}
+                  disabled={!samModelId || isROIMode}
+                  title={
+                    !samModelId
+                      ? 'Carga un modelo SAM en la barra superior primero'
+                      : image.samROI
+                        ? 'Redefinir ROI'
+                        : 'Definir ROI'
+                  }
                 >
-                  {image.crop ? '✂️' : '✂️'}
+                  🔲
                 </button>
                 <button
                   className={`${styles.calibrateBtn} ${isCalibrationMode && currentImageId === image.id ? styles.active : ''}`}
@@ -182,8 +195,10 @@ export const ImageLoader: React.FC<ImageLoaderProps> = ({
                   ✕
                 </button>
               </div>
+              {/* Embeddings progress bar */}
             </div>
-          ))
+            );
+          })
         )}
       </div>
     </div>

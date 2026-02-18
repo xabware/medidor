@@ -1,29 +1,14 @@
-import React, { createContext, useContext, useState, useCallback } from 'react';
-import type { LoadedImage, DrawingLine, ImageCalibration, CropRegion } from '../types';
+import React, { useState, useCallback } from 'react';
+import type { LoadedImage, DrawingLine, ImageCalibration, ROIRegion } from '../types';
 import { generateId } from '../utils/drawing';
-
-interface MedidorContextType {
-  images: LoadedImage[];
-  currentImageId: string | null;
-  addImages: (files: File[]) => Promise<void>;
-  removeImage: (imageId: string) => void;
-  setCurrentImage: (imageId: string) => void;
-  addMeasurement: (imageId: string, line: DrawingLine) => void;
-  updateCalibration: (imageId: string, calibration: ImageCalibration) => void;
-  updateCrop: (imageId: string, crop: CropRegion) => void;
-  removeMeasurement: (imageId: string, lineId: string) => void;
-  clearAllMeasurements: () => void;
-  getCurrentImage: () => LoadedImage | undefined;
-  setImages: React.Dispatch<React.SetStateAction<LoadedImage[]>>;
-}
-
-const MedidorContext = createContext<MedidorContextType | undefined>(undefined);
+import { compressImage } from '../utils/imageCompression';
+import { MedidorContext, type MedidorContextType } from './MedidorContextStore';
 
 export const MedidorProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [images, setImages] = useState<LoadedImage[]>([]);
   const [currentImageId, setCurrentImageId] = useState<string | null>(null);
 
-  const addImages = useCallback(async (files: File[]) => {
+  const addImages = useCallback(async (files: File[], maxDim: number | null = null) => {
     const newImages: LoadedImage[] = [];
 
     for (const file of files) {
@@ -42,14 +27,34 @@ export const MedidorProvider: React.FC<{ children: React.ReactNode }> = ({ child
         img.src = dataUrl;
       });
 
+      let finalDataUrl = dataUrl;
+      let finalWidth = img.width;
+      let finalHeight = img.height;
+      let origDataUrl: string | undefined;
+      let origWidth: number | undefined;
+      let origHeight: number | undefined;
+
+      if (maxDim && (img.width > maxDim || img.height > maxDim)) {
+        origDataUrl = dataUrl;
+        origWidth = img.width;
+        origHeight = img.height;
+        const result = await compressImage(dataUrl, maxDim);
+        finalDataUrl = result.dataUrl;
+        finalWidth = result.width;
+        finalHeight = result.height;
+      }
+
       newImages.push({
         id,
         file,
-        dataUrl,
-        width: img.width,
-        height: img.height,
+        dataUrl: finalDataUrl,
+        width: finalWidth,
+        height: finalHeight,
         measurements: [],
         timestamp: Date.now(),
+        originalDataUrl: origDataUrl,
+        originalWidth: origWidth,
+        originalHeight: origHeight,
       });
     }
 
@@ -87,16 +92,6 @@ export const MedidorProvider: React.FC<{ children: React.ReactNode }> = ({ child
     );
   }, []);
 
-  const updateCrop = useCallback((imageId: string, crop: CropRegion) => {
-    setImages((prev) =>
-      prev.map((img) =>
-        img.id === imageId
-          ? { ...img, crop }
-          : img
-      )
-    );
-  }, []);
-
   const removeMeasurement = useCallback((imageId: string, lineId: string) => {
     setImages((prev) =>
       prev.map((img) =>
@@ -124,6 +119,16 @@ export const MedidorProvider: React.FC<{ children: React.ReactNode }> = ({ child
     [images, currentImageId]
   );
 
+  const updateSamROI = useCallback((imageId: string, roi: ROIRegion | undefined) => {
+    setImages((prev) =>
+      prev.map((img) =>
+        img.id === imageId
+          ? { ...img, samROI: roi, embeddingsModelId: undefined }
+          : img
+      )
+    );
+  }, []);
+
   const value: MedidorContextType = {
     images,
     currentImageId,
@@ -132,11 +137,11 @@ export const MedidorProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setCurrentImage: setCurrentImageId,
     addMeasurement,
     updateCalibration,
-    updateCrop,
     removeMeasurement,
     clearAllMeasurements,
     getCurrentImage,
     setImages,
+    updateSamROI,
   };
 
   return (
@@ -146,10 +151,3 @@ export const MedidorProvider: React.FC<{ children: React.ReactNode }> = ({ child
   );
 };
 
-export const useMedidor = () => {
-  const context = useContext(MedidorContext);
-  if (!context) {
-    throw new Error('useMedidor must be used within MedidorProvider');
-  }
-  return context;
-};

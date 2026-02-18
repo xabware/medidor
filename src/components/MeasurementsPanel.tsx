@@ -1,5 +1,5 @@
 import React from 'react';
-import { useMedidor } from '../context/MedidorContext';
+import { useMedidor } from '../context/useMedidor';
 import { downloadCSV } from '../utils/drawing';
 import type { LoadedImage, DrawingLine } from '../types';
 import styles from './MeasurementsPanel.module.css';

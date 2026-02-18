@@ -1,23 +1,117 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { MedidorProvider } from './context/MedidorContext';
+import { useMedidor } from './context/useMedidor';
 import { ImageLoader } from './components/ImageLoader';
 import { ImageEditor } from './components/ImageEditor';
 import { MeasurementsPanel } from './components/MeasurementsPanel';
+import { SAMModelSelector } from './components/SAMModelSelector';
+import { compressImage } from './utils/imageCompression';
+import { saveProject, loadProject } from './utils/projectFile';
 import './App.css';
 
 function AppContent() {
   const [isCalibrationMode, setIsCalibrationMode] = useState(false);
-  const [isCropMode, setIsCropMode] = useState(false);
+  const [isROIMode, setIsROIMode] = useState(false);
+  const [maxResolution, setMaxResolution] = useState<number | null>(1024);
   const [showTutorial, setShowTutorial] = useState(false);
+  const [samModelId, setSamModelId] = useState<string | null>(null);
   const calibrationUnit = 'cm';
+  const { images, setImages, currentImageId, setCurrentImage } = useMedidor();
+
+  // ── Save / Load project ────────────────────────────────────────
+  const handleSave = useCallback(() => {
+    saveProject(images, currentImageId, maxResolution);
+  }, [images, currentImageId, maxResolution]);
+
+  const handleLoad = useCallback(async () => {
+    const result = await loadProject();
+    if (!result) return;
+    setImages(result.images);
+    if (result.currentImageId && result.images.some(i => i.id === result.currentImageId)) {
+      setCurrentImage(result.currentImageId);
+    } else if (result.images.length > 0) {
+      setCurrentImage(result.images[0].id);
+    }
+    if (result.maxResolution !== undefined) {
+      setMaxResolution(result.maxResolution);
+    }
+  }, [setImages, setCurrentImage]);
+
+  const handleResolutionChange = useCallback(async (newMaxDim: number | null) => {
+    setMaxResolution(newMaxDim);
+
+    // Reprocess all existing images with the new resolution
+    const updated = [];
+    for (const img of images) {
+      // Get the original source (either stored original or current)
+      const srcUrl = img.originalDataUrl ?? img.dataUrl;
+      const srcW = img.originalWidth ?? img.width;
+      const srcH = img.originalHeight ?? img.height;
+
+      if (newMaxDim === null || (srcW <= newMaxDim && srcH <= newMaxDim)) {
+        // Use original (no downscale needed)
+        updated.push({
+          ...img,
+          dataUrl: srcUrl,
+          width: srcW,
+          height: srcH,
+          originalDataUrl: undefined,
+          originalWidth: undefined,
+          originalHeight: undefined,
+          embeddingsModelId: img.dataUrl !== srcUrl ? undefined : img.embeddingsModelId,
+        });
+      } else {
+        // Downscale to requested resolution
+        const result = await compressImage(srcUrl, newMaxDim);
+        const changed = result.dataUrl !== img.dataUrl;
+        updated.push({
+          ...img,
+          originalDataUrl: srcUrl,
+          originalWidth: srcW,
+          originalHeight: srcH,
+          dataUrl: result.dataUrl,
+          width: result.width,
+          height: result.height,
+          embeddingsModelId: changed ? undefined : img.embeddingsModelId,
+        });
+      }
+    }
+    setImages(updated);
+  }, [images, setImages]);
 
   return (
     <div className="app-container">
       <header className="app-header">
         <h1 className="app-title">🌱 Medidor de Raíces</h1>
-        <button className="tutorial-button" onClick={() => setShowTutorial(true)}>
-          ❓ Tutorial
-        </button>
+        <SAMModelSelector onModelStateChange={(ready, modelId) => setSamModelId(ready ? modelId : null)} />
+        <div className="resolution-selector" title="Resolución máxima de las imágenes cargadas">
+          📐
+          <select
+            value={maxResolution === null ? 'original' : String(maxResolution)}
+            onChange={(e) => {
+              const val = e.target.value;
+              handleResolutionChange(val === 'original' ? null : Number(val));
+            }}
+          >
+            <option value="original">Original</option>
+            <option value="4096">4096 px</option>
+            <option value="3072">3072 px</option>
+            <option value="2048">2048 px</option>
+            <option value="1024">1024 px</option>
+            <option value="512">512 px</option>
+          </select>
+        </div>
+        <div className="header-actions">
+          <button className="header-action-btn" onClick={handleSave} title="Guardar proyecto (.raiz)">
+            💾 Guardar
+          </button>
+          <button className="header-action-btn" onClick={handleLoad} title="Cargar proyecto (.raiz)">
+            📂 Cargar
+          </button>
+          <button className="tutorial-button" onClick={() => setShowTutorial(true)}>
+            ❓ Tutorial
+          </button>
+        </div>
       </header>
       
       <div className="app-layout">
@@ -26,10 +120,11 @@ function AppContent() {
             onStartCalibration={() => setIsCalibrationMode(true)}
             onCancelCalibration={() => setIsCalibrationMode(false)}
             isCalibrationMode={isCalibrationMode}
-            onStartCrop={() => setIsCropMode(true)}
-            onCancelCrop={() => setIsCropMode(false)}
-            isCropMode={isCropMode}
             calibrationUnit={calibrationUnit}
+            samModelId={samModelId}
+            maxResolution={maxResolution}
+            isROIMode={isROIMode}
+            onStartROI={() => setIsROIMode(true)}
           />
         </aside>
 
@@ -37,9 +132,10 @@ function AppContent() {
           <ImageEditor
             isCalibrationMode={isCalibrationMode}
             onCalibrationComplete={() => setIsCalibrationMode(false)}
-            isCropMode={isCropMode}
-            onCropComplete={() => setIsCropMode(false)}
             calibrationUnit={calibrationUnit}
+            samModelId={samModelId}
+            isROIMode={isROIMode}
+            onROIComplete={() => setIsROIMode(false)}
           />
         </main>
 
@@ -58,17 +154,17 @@ function AppContent() {
             <div className="tutorial-content">
               <section>
                 <h3>📂 1. Cargar Imágenes</h3>
-                <p>Arrastra y suelta imágenes o haz clic en la zona de carga para seleccionarlas desde tu ordenador.</p>
+                <p>Arrastra y suelta imágenes o haz clic en la zona de carga para seleccionarlas desde tu ordenador. Por defecto, las imágenes se comprimen automáticamente a ≤1024px para agilizar el procesamiento.</p>
               </section>
 
               <section>
-                <h3>✂️ 2. Recortar Imagen (Opcional)</h3>
-                <p>Haz clic en el botón <strong>✂️</strong> junto a la imagen para activar el modo recorte. Arrastra un rectángulo sobre la imagen original para seleccionar la región de interés.</p>
+                <h3>📐 2. Resolución de imágenes</h3>
+                <p>Usa el selector <strong>📐</strong> en la barra superior para elegir la resolución máxima de las imágenes: Original, 4096, 3072, 2048, 1024 o 512 px. Reducir la resolución agiliza el procesamiento. Por defecto: 1024 px.</p>
               </section>
 
               <section>
                 <h3>📏 3. Calibrar</h3>
-                <p>Haz clic en el botón <strong>📏</strong> para activar el modo calibración. Dibuja una línea sobre un objeto de longitud conocida e introduce la medida real en {calibrationUnit}.</p>
+                <p>Haz clic en el botón <strong>📏</strong> para activar el modo calibración. Dibuja una línea sobre un objeto de longitud conocida e introduce la medida real en cm.</p>
               </section>
 
               <section>
@@ -82,8 +178,8 @@ function AppContent() {
               </section>
 
               <section>
-                <h3>🔍 5. Detección Automática</h3>
-                <p>Haz clic en <strong>🔍 Detectar raíces</strong> para que el sistema analice automáticamente la imagen y detecte las raíces. Podrás seleccionar cuántas raíces agregar.</p>
+                <h3>🧠 5. Modelo SAM (preparación)</h3>
+                <p>Carga un modelo SAM desde la barra superior y calcula los embeddings con el botón 🧠 junto a cada imagen. Los embeddings se guardan en caché para uso futuro con funcionalidades de segmentación.</p>
               </section>
 
               <section>

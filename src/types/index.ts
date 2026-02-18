@@ -3,15 +3,6 @@ export interface DrawingPoint {
   y: number;
 }
 
-export interface CropRegion {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  croppedDataUrl: string;
-  timestamp: number;
-}
-
 export interface DrawingLine {
   id: string;
   points: DrawingPoint[];
@@ -29,6 +20,14 @@ export interface ImageCalibration {
   timestamp: number;
 }
 
+/** Axis-aligned region of interest (image-space coords). */
+export interface ROIRegion {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 export interface LoadedImage {
   id: string;
   file: File;
@@ -37,8 +36,15 @@ export interface LoadedImage {
   height: number;
   measurements: DrawingLine[];
   calibration?: ImageCalibration;
-  crop?: CropRegion;
   timestamp: number;
+  /** Model ID for which embeddings have been computed */
+  embeddingsModelId?: string;
+  /** ROI for SAM embeddings (image-space coords) */
+  samROI?: ROIRegion;
+  /** Original image before auto-compression (stored for toggle restore) */
+  originalDataUrl?: string;
+  originalWidth?: number;
+  originalHeight?: number;
 }
 
 export interface MeasurementData extends Record<string, string | number> {
