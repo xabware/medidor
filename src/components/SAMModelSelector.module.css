@@ -7,40 +7,46 @@
 }
 
 .selector {
-  background: rgba(255,255,255,0.15);
+  background: rgba(0, 0, 0, 0.3);
   color: white;
-  border: 1px solid rgba(255,255,255,0.3);
-  border-radius: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 4px;
   padding: 4px 8px;
   font-size: 0.8rem;
   cursor: pointer;
-  max-width: 140px;
+  max-width: 160px;
+  outline: none;
 }
-.selector:focus { outline: 1px solid rgba(255,255,255,0.6); }
+.selector:focus { border-color: rgba(255, 255, 255, 0.6); }
+.selector option { background: #333; color: white; }
 
 .loadBtn {
-  background: rgba(255,255,255,0.2);
+  background: rgba(255, 255, 255, 0.2);
   color: white;
-  border: 1px solid rgba(255,255,255,0.35);
-  border-radius: 5px;
-  padding: 4px 10px;
-  font-size: 0.78rem;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 0.85rem;
   font-weight: 500;
   cursor: pointer;
-  transition: background 0.2s;
+  transition: all 0.2s;
   white-space: nowrap;
 }
-.loadBtn:hover { background: rgba(255,255,255,0.35); }
+.loadBtn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.3); border-color: rgba(255, 255, 255, 0.5); }
 .loadBtn:disabled { opacity: 0.55; cursor: default; }
 
 .loadBtnActive {
-  background: rgba(67,160,71,0.55);
-  border-color: rgba(67,160,71,0.7);
+  background: rgba(67, 160, 71, 0.55);
+  border-color: rgba(67, 160, 71, 0.7);
+}
+.loadBtnActive:hover:not(:disabled) {
+  background: rgba(67, 160, 71, 0.7);
+  border-color: rgba(67, 160, 71, 0.85);
 }
 
 .statusText {
-  font-size: 0.75rem;
-  color: rgba(255,255,255,0.85);
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.85);
   white-space: nowrap;
   max-width: 220px;
   overflow: hidden;
@@ -48,22 +54,23 @@
 }
 
 .infoBtn {
-  background: none;
-  border: 1px solid rgba(255,255,255,0.3);
+  background: rgba(255, 255, 255, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.3);
   color: white;
   border-radius: 50%;
-  width: 22px;
-  height: 22px;
-  font-size: 0.72rem;
+  width: 24px;
+  height: 24px;
+  font-size: 0.75rem;
+  font-weight: 600;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.2s;
+  transition: all 0.2s;
   padding: 0;
   flex-shrink: 0;
 }
-.infoBtn:hover { background: rgba(255,255,255,0.2); }
+.infoBtn:hover { background: rgba(255, 255, 255, 0.3); border-color: rgba(255, 255, 255, 0.5); }
 
 /* Info panel (popup) */
 .infoOverlay {
