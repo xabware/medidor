@@ -652,3 +652,652 @@ export function debugVisualizeExtraction(data: DebugRawComponentsData): void {
   container.insertBefore(block, container.firstChild);
   win.scrollTo(0, 0);
 }
+
+/* ─── Roots mask visualization (baseline) ─────────────────────────── */
+
+export interface DebugRootsMaskData {
+  roiWidth: number;
+  roiHeight: number;
+  maskH: number;
+  maskW: number;
+  /** All 3 SAM masks (true = SAM foreground, typically the background/substrate) */
+  allMasks: boolean[][][];
+  allAreas: number[];
+  scores: number[];
+  /** Which mask was chosen as background (to invert) */
+  chosenMaskIdx: number;
+  /** The inverted mask (true = root pixels) */
+  rootsMask: boolean[][];
+  rootsArea: number;
+  roiImageUrl?: string;
+}
+
+/**
+ * Show the SAM masks + the inverted roots mask in the debug window.
+ * Layout:
+ *  - Row 1: ROI image + all 3 original masks (with the chosen one highlighted)
+ *  - Row 2: the inverted roots mask (large), overlaid on the ROI image
+ */
+export function debugVisualizeRootsMask(data: DebugRootsMaskData): void {
+  let win: Window;
+  try { win = ensureWindow(); } catch { return; }
+  const doc = win.document;
+  const container = doc.getElementById('content');
+  if (!container) return;
+
+  callCounter++;
+  const block = doc.createElement('div');
+  block.className = 'call-block';
+
+  const totalPx = data.maskH * data.maskW;
+  const scaleSmall = Math.min(1, MAX_CARD_W / data.roiWidth);
+  const smallW = Math.round(data.roiWidth * scaleSmall);
+  const smallH = Math.round(data.roiHeight * scaleSmall);
+
+  const scaleBig = Math.min(1, (MAX_CARD_W * 2) / data.roiWidth);
+  const bigW = Math.round(data.roiWidth * scaleBig);
+  const bigH = Math.round(data.roiHeight * scaleBig);
+
+  const maskScaleX = data.roiWidth / data.maskW;
+  const maskScaleY = data.roiHeight / data.maskH;
+
+  // Header
+  const header = doc.createElement('div');
+  header.className = 'call-header';
+  header.innerHTML = `
+    <span class="num">#${callCounter} — MÁSCARA RAÍCES</span>
+    <span class="info">Mask ${data.chosenMaskIdx} invertida → raíces = ${(data.rootsArea / totalPx * 100).toFixed(1)}% del área</span>
+  `;
+  block.appendChild(header);
+
+  // ─── Row 1: ROI image + 3 original SAM masks ───
+  const subtitle1 = doc.createElement('h2');
+  subtitle1.textContent = 'Máscaras originales de SAM (naranja = true/foreground)';
+  block.appendChild(subtitle1);
+
+  const row1 = doc.createElement('div');
+  row1.className = 'row';
+
+  // ROI image card
+  const imgCard = doc.createElement('div');
+  imgCard.className = 'card';
+  const imgCanvas = doc.createElement('canvas');
+  imgCanvas.width = smallW;
+  imgCanvas.height = smallH;
+  const imgCtx = imgCanvas.getContext('2d')!;
+  imgCtx.fillStyle = '#222';
+  imgCtx.fillRect(0, 0, smallW, smallH);
+  if (data.roiImageUrl) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const img = new (win as any).Image() as HTMLImageElement;
+    img.onload = () => { imgCtx.drawImage(img, 0, 0, smallW, smallH); };
+    img.src = data.roiImageUrl;
+  }
+  imgCard.appendChild(imgCanvas);
+  const imgLbl = doc.createElement('div');
+  imgLbl.className = 'label';
+  imgLbl.textContent = 'Imagen ROI';
+  imgCard.appendChild(imgLbl);
+  row1.appendChild(imgCard);
+
+  // 3 mask cards
+  for (let m = 0; m < data.allMasks.length; m++) {
+    const mask = data.allMasks[m];
+    const areaPct = (data.allAreas[m] / totalPx * 100).toFixed(1);
+    const isChosen = m === data.chosenMaskIdx;
+
+    const card = doc.createElement('div');
+    card.className = isChosen ? 'card selected' : 'card';
+    const c = doc.createElement('canvas');
+    c.width = smallW;
+    c.height = smallH;
+    const ctx = c.getContext('2d')!;
+
+    const id = ctx.createImageData(smallW, smallH);
+    const px = id.data;
+    for (let dy = 0; dy < smallH; dy++) {
+      const my = Math.min(data.maskH - 1, Math.floor(dy / scaleSmall / maskScaleY));
+      for (let dx = 0; dx < smallW; dx++) {
+        const mx = Math.min(data.maskW - 1, Math.floor(dx / scaleSmall / maskScaleX));
+        const idx = (dy * smallW + dx) * 4;
+        if (mask[my]?.[mx]) {
+          px[idx] = 230; px[idx + 1] = 150; px[idx + 2] = 30; px[idx + 3] = 200;
+        } else {
+          px[idx] = 15; px[idx + 1] = 15; px[idx + 2] = 30; px[idx + 3] = 255;
+        }
+      }
+    }
+    ctx.putImageData(id, 0, 0);
+
+    card.appendChild(c);
+    const lbl = doc.createElement('div');
+    lbl.className = 'label';
+    lbl.textContent = `Mask ${m} — ${areaPct}%`;
+    card.appendChild(lbl);
+    const sc = doc.createElement('div');
+    sc.className = 'score';
+    sc.textContent = `IoU: ${data.scores[m]?.toFixed(3) ?? '?'}`;
+    card.appendChild(sc);
+    if (isChosen) {
+      const bdg = doc.createElement('div');
+      bdg.className = 'badge';
+      bdg.textContent = 'INVERTIDA';
+      card.appendChild(bdg);
+    }
+    row1.appendChild(card);
+  }
+  block.appendChild(row1);
+
+  // ─── Row 2: Inverted roots mask (big) ───
+  const subtitle2 = doc.createElement('h2');
+  subtitle2.textContent = `Máscara de raíces (invertida de mask ${data.chosenMaskIdx}) — ${(data.rootsArea / totalPx * 100).toFixed(1)}%`;
+  subtitle2.style.color = '#00d4aa';
+  block.appendChild(subtitle2);
+
+  const row2 = doc.createElement('div');
+  row2.className = 'row';
+
+  // Roots mask on dark background
+  const rootsCard1 = doc.createElement('div');
+  rootsCard1.className = 'card selected';
+  const rootsCanvas1 = doc.createElement('canvas');
+  rootsCanvas1.width = bigW;
+  rootsCanvas1.height = bigH;
+  const rCtx1 = rootsCanvas1.getContext('2d')!;
+  const rid1 = rCtx1.createImageData(bigW, bigH);
+  const rpx1 = rid1.data;
+  for (let dy = 0; dy < bigH; dy++) {
+    const my = Math.min(data.maskH - 1, Math.floor(dy / scaleBig / maskScaleY));
+    for (let dx = 0; dx < bigW; dx++) {
+      const mx = Math.min(data.maskW - 1, Math.floor(dx / scaleBig / maskScaleX));
+      const idx = (dy * bigW + dx) * 4;
+      if (data.rootsMask[my]?.[mx]) {
+        rpx1[idx] = 0; rpx1[idx + 1] = 212; rpx1[idx + 2] = 170; rpx1[idx + 3] = 255;
+      } else {
+        rpx1[idx] = 15; rpx1[idx + 1] = 15; rpx1[idx + 2] = 30; rpx1[idx + 3] = 255;
+      }
+    }
+  }
+  rCtx1.putImageData(rid1, 0, 0);
+  rootsCard1.appendChild(rootsCanvas1);
+  const rLbl1 = doc.createElement('div');
+  rLbl1.className = 'label';
+  rLbl1.textContent = 'Raíces (sobre fondo oscuro)';
+  rootsCard1.appendChild(rLbl1);
+  row2.appendChild(rootsCard1);
+
+  // Roots mask overlaid on ROI image
+  const rootsCard2 = doc.createElement('div');
+  rootsCard2.className = 'card selected';
+  const rootsCanvas2 = doc.createElement('canvas');
+  rootsCanvas2.width = bigW;
+  rootsCanvas2.height = bigH;
+  const rCtx2 = rootsCanvas2.getContext('2d')!;
+  rCtx2.fillStyle = '#111';
+  rCtx2.fillRect(0, 0, bigW, bigH);
+
+  const drawOverlay = () => {
+    const overlayId = rCtx2.createImageData(bigW, bigH);
+    const opx = overlayId.data;
+    for (let dy = 0; dy < bigH; dy++) {
+      const my = Math.min(data.maskH - 1, Math.floor(dy / scaleBig / maskScaleY));
+      for (let dx = 0; dx < bigW; dx++) {
+        const mx = Math.min(data.maskW - 1, Math.floor(dx / scaleBig / maskScaleX));
+        if (data.rootsMask[my]?.[mx]) {
+          const idx = (dy * bigW + dx) * 4;
+          opx[idx] = 0; opx[idx + 1] = 255; opx[idx + 2] = 100; opx[idx + 3] = 180;
+        }
+      }
+    }
+    rCtx2.putImageData(overlayId, 0, 0);
+  };
+
+  if (data.roiImageUrl) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const img2 = new (win as any).Image() as HTMLImageElement;
+    img2.onload = () => {
+      rCtx2.drawImage(img2, 0, 0, bigW, bigH);
+      drawOverlay();
+    };
+    img2.src = data.roiImageUrl;
+  } else {
+    drawOverlay();
+  }
+
+  rootsCard2.appendChild(rootsCanvas2);
+  const rLbl2 = doc.createElement('div');
+  rLbl2.className = 'label';
+  rLbl2.textContent = 'Raíces sobre imagen ROI';
+  rootsCard2.appendChild(rLbl2);
+  row2.appendChild(rootsCard2);
+
+  block.appendChild(row2);
+  container.insertBefore(block, container.firstChild);
+  win.scrollTo(0, 0);
+}
+
+/* ─── Instance segmentation visualization ─────────────────────────── */
+
+export interface DebugInstancesData {
+  roiWidth: number;
+  roiHeight: number;
+  maskH: number;
+  maskW: number;
+  instances: Array<{
+    mask: boolean[][];
+    area: number;
+    bbox: { minX: number; minY: number; maxX: number; maxY: number };
+  }>;
+  roiImageUrl?: string;
+}
+
+/**
+ * Show labeled instances — each continuous root region in a distinct color,
+ * overlaid on the ROI image + individual cards per instance.
+ */
+export function debugVisualizeInstances(data: DebugInstancesData): void {
+  let win: Window;
+  try { win = ensureWindow(); } catch { return; }
+  const doc = win.document;
+  const container = doc.getElementById('content');
+  if (!container) return;
+
+  callCounter++;
+  const block = doc.createElement('div');
+  block.className = 'call-block';
+
+  const scaleBig = Math.min(1, (MAX_CARD_W * 2) / data.roiWidth);
+  const bigW = Math.round(data.roiWidth * scaleBig);
+  const bigH = Math.round(data.roiHeight * scaleBig);
+
+  const scaleSmall = Math.min(1, MAX_CARD_W / data.roiWidth);
+
+  const maskScaleX = data.roiWidth / data.maskW;
+  const maskScaleY = data.roiHeight / data.maskH;
+
+  // Header
+  const header = doc.createElement('div');
+  header.className = 'call-header';
+  header.innerHTML = `
+    <span class="num">#${callCounter} — INSTANCIAS</span>
+    <span class="info">${data.instances.length} instancias de raíz detectadas</span>
+  `;
+  block.appendChild(header);
+
+  // ─── Overview: all instances overlaid on ROI ───
+  const row1 = doc.createElement('div');
+  row1.className = 'row';
+
+  const overviewCard = doc.createElement('div');
+  overviewCard.className = 'card selected';
+  const overviewCanvas = doc.createElement('canvas');
+  overviewCanvas.width = bigW;
+  overviewCanvas.height = bigH;
+  const ovCtx = overviewCanvas.getContext('2d')!;
+  ovCtx.fillStyle = '#111';
+  ovCtx.fillRect(0, 0, bigW, bigH);
+
+  const drawAllInstances = () => {
+    // Build a single overlay ImageData with ALL instances
+    const id = ovCtx.createImageData(bigW, bigH);
+    const px = id.data;
+    for (let ci = 0; ci < data.instances.length; ci++) {
+      const inst = data.instances[ci];
+      const [cr, cg, cb] = COMP_COLORS[ci % COMP_COLORS.length];
+      for (let dy = 0; dy < bigH; dy++) {
+        const my = Math.min(data.maskH - 1, Math.floor(dy / scaleBig / maskScaleY));
+        for (let dx = 0; dx < bigW; dx++) {
+          const mx = Math.min(data.maskW - 1, Math.floor(dx / scaleBig / maskScaleX));
+          if (inst.mask[my]?.[mx]) {
+            const idx = (dy * bigW + dx) * 4;
+            px[idx] = cr; px[idx + 1] = cg; px[idx + 2] = cb; px[idx + 3] = 170;
+          }
+        }
+      }
+    }
+    // putImageData ignores compositing, so use a temp canvas + drawImage
+    const tmp = doc.createElement('canvas');
+    tmp.width = bigW; tmp.height = bigH;
+    tmp.getContext('2d')!.putImageData(id, 0, 0);
+    ovCtx.drawImage(tmp, 0, 0);
+
+    // Labels with instance number + area
+    ovCtx.font = 'bold 13px sans-serif';
+    ovCtx.textAlign = 'center';
+    for (let ci = 0; ci < data.instances.length; ci++) {
+      const inst = data.instances[ci];
+      const cx = ((inst.bbox.minX + inst.bbox.maxX) / 2) * maskScaleX * scaleBig;
+      const cy = ((inst.bbox.minY + inst.bbox.maxY) / 2) * maskScaleY * scaleBig;
+      ovCtx.strokeStyle = '#000';
+      ovCtx.lineWidth = 3;
+      ovCtx.fillStyle = '#fff';
+      ovCtx.strokeText(`${ci + 1}`, cx, cy);
+      ovCtx.fillText(`${ci + 1}`, cx, cy);
+      ovCtx.font = '10px sans-serif';
+      ovCtx.strokeText(`${inst.area}px`, cx, cy + 14);
+      ovCtx.fillText(`${inst.area}px`, cx, cy + 14);
+      ovCtx.font = 'bold 13px sans-serif';
+    }
+  };
+
+  if (data.roiImageUrl) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const img = new (win as any).Image() as HTMLImageElement;
+    img.onload = () => {
+      ovCtx.globalAlpha = 0.5;
+      ovCtx.drawImage(img, 0, 0, bigW, bigH);
+      ovCtx.globalAlpha = 1;
+      drawAllInstances();
+    };
+    img.src = data.roiImageUrl;
+  } else {
+    drawAllInstances();
+  }
+
+  overviewCard.appendChild(overviewCanvas);
+  const ovLbl = doc.createElement('div');
+  ovLbl.className = 'label';
+  ovLbl.textContent = `${data.instances.length} instancias sobre imagen ROI`;
+  overviewCard.appendChild(ovLbl);
+  row1.appendChild(overviewCard);
+  block.appendChild(row1);
+
+  // ─── Individual instance cards ───
+  const subtitle = doc.createElement('h2');
+  subtitle.textContent = 'Instancias individuales';
+  block.appendChild(subtitle);
+
+  const row2 = doc.createElement('div');
+  row2.className = 'row';
+
+  for (let ci = 0; ci < data.instances.length; ci++) {
+    const inst = data.instances[ci];
+    const [cr, cg, cb] = COMP_COLORS[ci % COMP_COLORS.length];
+    const bw = inst.bbox.maxX - inst.bbox.minX + 1;
+    const bh = inst.bbox.maxY - inst.bbox.minY + 1;
+    const aspect = (Math.max(bw, bh) / Math.max(1, Math.min(bw, bh))).toFixed(1);
+
+    const card = doc.createElement('div');
+    card.className = 'card';
+    card.style.borderLeft = `4px solid rgb(${cr},${cg},${cb})`;
+    const cardW = Math.max(50, Math.min(140, Math.round(bw * maskScaleX * scaleSmall * 1.5)));
+    const cardH = Math.max(50, Math.min(220, Math.round(bh * maskScaleY * scaleSmall * 1.5)));
+    const c = doc.createElement('canvas');
+    c.width = cardW;
+    c.height = cardH;
+    const ctx = c.getContext('2d')!;
+    ctx.fillStyle = '#0f0f1a';
+    ctx.fillRect(0, 0, cardW, cardH);
+
+    const sxC = cardW / bw;
+    const syC = cardH / bh;
+    for (let my = inst.bbox.minY; my <= inst.bbox.maxY; my++) {
+      for (let mx = inst.bbox.minX; mx <= inst.bbox.maxX; mx++) {
+        if (inst.mask[my]?.[mx]) {
+          const dx = Math.floor((mx - inst.bbox.minX) * sxC);
+          const dy = Math.floor((my - inst.bbox.minY) * syC);
+          const dw = Math.max(1, Math.ceil(sxC));
+          const dh = Math.max(1, Math.ceil(syC));
+          ctx.fillStyle = `rgba(${cr},${cg},${cb},0.85)`;
+          ctx.fillRect(dx, dy, dw, dh);
+        }
+      }
+    }
+
+    card.appendChild(c);
+    const lbl = doc.createElement('div');
+    lbl.className = 'label';
+    lbl.textContent = `#${ci + 1} — ${inst.area}px`;
+    card.appendChild(lbl);
+    const sc = doc.createElement('div');
+    sc.className = 'score';
+    sc.textContent = `${bw}×${bh} asp:${aspect}`;
+    card.appendChild(sc);
+    row2.appendChild(card);
+  }
+
+  block.appendChild(row2);
+  container.insertBefore(block, container.firstChild);
+  win.scrollTo(0, 0);
+}
+
+/* ─── Skeleton visualization ──────────────────────────────────────── */
+
+export interface DebugSkeletonsData {
+  roiWidth: number;
+  roiHeight: number;
+  maskH: number;
+  maskW: number;
+  instances: Array<{
+    mask: boolean[][];
+    area: number;
+    bbox: { minX: number; minY: number; maxX: number; maxY: number };
+    skeleton: Array<{ x: number; y: number }>;
+    rawSkeleton: Array<{ x: number; y: number }>;
+  }>;
+  roiImageUrl?: string;
+}
+
+/**
+ * Show skeletons (1px centerlines) overlaid on instance masks and ROI image,
+ * plus individual cards per instance showing the skeleton on its mask.
+ */
+export function debugVisualizeSkeletons(data: DebugSkeletonsData): void {
+  let win: Window;
+  try { win = ensureWindow(); } catch { return; }
+  const doc = win.document;
+  const container = doc.getElementById('content');
+  if (!container) return;
+
+  callCounter++;
+  const block = doc.createElement('div');
+  block.className = 'call-block';
+
+  const scaleBig = Math.min(1, (MAX_CARD_W * 2) / data.roiWidth);
+  const bigW = Math.round(data.roiWidth * scaleBig);
+  const bigH = Math.round(data.roiHeight * scaleBig);
+
+  const scaleSmall = Math.min(1, MAX_CARD_W / data.roiWidth);
+
+  const maskScaleX = data.roiWidth / data.maskW;
+  const maskScaleY = data.roiHeight / data.maskH;
+
+  const totalRawPts = data.instances.reduce((s, inst) => s + inst.rawSkeleton.length, 0);
+  const totalSimplPts = data.instances.reduce((s, inst) => s + inst.skeleton.length, 0);
+
+  // Header
+  const header = doc.createElement('div');
+  header.className = 'call-header';
+  header.innerHTML = `
+    <span class="num">#${callCounter} — ESQUELETOS</span>
+    <span class="info">${data.instances.length} instancias, ${totalRawPts} pts raw, ${totalSimplPts} pts simplificados</span>
+  `;
+  block.appendChild(header);
+
+  // ─── Overview: masks (dim) + skeletons (bright) on ROI ───
+  const row1 = doc.createElement('div');
+  row1.className = 'row';
+
+  const overviewCard = doc.createElement('div');
+  overviewCard.className = 'card selected';
+  const overviewCanvas = doc.createElement('canvas');
+  overviewCanvas.width = bigW;
+  overviewCanvas.height = bigH;
+  const ovCtx = overviewCanvas.getContext('2d')!;
+  ovCtx.fillStyle = '#111';
+  ovCtx.fillRect(0, 0, bigW, bigH);
+
+  const drawSkeletons = () => {
+    // 1) Draw dim mask overlay for all instances
+    const maskId = ovCtx.createImageData(bigW, bigH);
+    const maskPx = maskId.data;
+    for (let ci = 0; ci < data.instances.length; ci++) {
+      const inst = data.instances[ci];
+      const [cr, cg, cb] = COMP_COLORS[ci % COMP_COLORS.length];
+      for (let dy = 0; dy < bigH; dy++) {
+        const my = Math.min(data.maskH - 1, Math.floor(dy / scaleBig / maskScaleY));
+        for (let dx = 0; dx < bigW; dx++) {
+          const mx = Math.min(data.maskW - 1, Math.floor(dx / scaleBig / maskScaleX));
+          if (inst.mask[my]?.[mx]) {
+            const idx = (dy * bigW + dx) * 4;
+            maskPx[idx] = cr; maskPx[idx + 1] = cg; maskPx[idx + 2] = cb; maskPx[idx + 3] = 60;
+          }
+        }
+      }
+    }
+    const tmp = doc.createElement('canvas');
+    tmp.width = bigW; tmp.height = bigH;
+    tmp.getContext('2d')!.putImageData(maskId, 0, 0);
+    ovCtx.drawImage(tmp, 0, 0);
+
+    // 2) Draw raw skeletons as pixel dots (full resolution after spur pruning)
+    for (let ci = 0; ci < data.instances.length; ci++) {
+      const inst = data.instances[ci];
+      const [cr, cg, cb] = COMP_COLORS[ci % COMP_COLORS.length];
+      const bright = `rgb(${Math.min(255, cr + 80)},${Math.min(255, cg + 80)},${Math.min(255, cb + 80)})`;
+      // Draw raw skeleton pixels
+      ovCtx.fillStyle = bright;
+      for (const pt of inst.rawSkeleton) {
+        const sx = pt.x * maskScaleX * scaleBig;
+        const sy = pt.y * maskScaleY * scaleBig;
+        ovCtx.fillRect(Math.round(sx) - 0.5, Math.round(sy) - 0.5, 2, 2);
+      }
+      // Draw simplified skeleton as thicker line on top for reference
+      if (inst.skeleton.length >= 2) {
+        ovCtx.strokeStyle = `rgba(255,255,255,0.35)`;
+        ovCtx.lineWidth = 1;
+        ovCtx.lineJoin = 'round';
+        ovCtx.beginPath();
+        const p0 = inst.skeleton[0];
+        ovCtx.moveTo(p0.x * maskScaleX * scaleBig, p0.y * maskScaleY * scaleBig);
+        for (let i = 1; i < inst.skeleton.length; i++) {
+          const p = inst.skeleton[i];
+          ovCtx.lineTo(p.x * maskScaleX * scaleBig, p.y * maskScaleY * scaleBig);
+        }
+        ovCtx.stroke();
+      }
+    }
+
+    // 3) Labels
+    ovCtx.font = 'bold 12px sans-serif';
+    ovCtx.textAlign = 'center';
+    for (let ci = 0; ci < data.instances.length; ci++) {
+      const inst = data.instances[ci];
+      const cx = ((inst.bbox.minX + inst.bbox.maxX) / 2) * maskScaleX * scaleBig;
+      const cy = ((inst.bbox.minY + inst.bbox.maxY) / 2) * maskScaleY * scaleBig;
+      ovCtx.strokeStyle = '#000';
+      ovCtx.lineWidth = 3;
+      ovCtx.fillStyle = '#fff';
+      ovCtx.strokeText(`${ci + 1}`, cx, cy);
+      ovCtx.fillText(`${ci + 1}`, cx, cy);
+      ovCtx.font = '9px sans-serif';
+      ovCtx.strokeText(`${inst.rawSkeleton.length} pts`, cx, cy + 12);
+      ovCtx.fillText(`${inst.rawSkeleton.length} pts`, cx, cy + 12);
+      ovCtx.font = 'bold 12px sans-serif';
+    }
+  };
+
+  if (data.roiImageUrl) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const img = new (win as any).Image() as HTMLImageElement;
+    img.onload = () => {
+      ovCtx.globalAlpha = 0.45;
+      ovCtx.drawImage(img, 0, 0, bigW, bigH);
+      ovCtx.globalAlpha = 1;
+      drawSkeletons();
+    };
+    img.src = data.roiImageUrl;
+  } else {
+    drawSkeletons();
+  }
+
+  overviewCard.appendChild(overviewCanvas);
+  const ovLbl = doc.createElement('div');
+  ovLbl.className = 'label';
+  ovLbl.textContent = `Esqueletos sobre máscara + ROI (${totalRawPts} raw, ${totalSimplPts} simplificados)`;
+  overviewCard.appendChild(ovLbl);
+  row1.appendChild(overviewCard);
+  block.appendChild(row1);
+
+  // ─── Individual skeleton cards ───
+  const subtitle = doc.createElement('h2');
+  subtitle.textContent = 'Esqueletos individuales';
+  block.appendChild(subtitle);
+
+  const row2 = doc.createElement('div');
+  row2.className = 'row';
+
+  for (let ci = 0; ci < data.instances.length; ci++) {
+    const inst = data.instances[ci];
+    const [cr, cg, cb] = COMP_COLORS[ci % COMP_COLORS.length];
+    const bw = inst.bbox.maxX - inst.bbox.minX + 1;
+    const bh = inst.bbox.maxY - inst.bbox.minY + 1;
+
+    const card = doc.createElement('div');
+    card.className = 'card';
+    card.style.borderLeft = `4px solid rgb(${cr},${cg},${cb})`;
+    const cardW = Math.max(50, Math.min(160, Math.round(bw * maskScaleX * scaleSmall * 1.5)));
+    const cardH = Math.max(50, Math.min(240, Math.round(bh * maskScaleY * scaleSmall * 1.5)));
+    const c = doc.createElement('canvas');
+    c.width = cardW;
+    c.height = cardH;
+    const ctx = c.getContext('2d')!;
+    ctx.fillStyle = '#0f0f1a';
+    ctx.fillRect(0, 0, cardW, cardH);
+
+    const sxC = cardW / bw;
+    const syC = cardH / bh;
+
+    // Dim mask fill
+    for (let my = inst.bbox.minY; my <= inst.bbox.maxY; my++) {
+      for (let mx = inst.bbox.minX; mx <= inst.bbox.maxX; mx++) {
+        if (inst.mask[my]?.[mx]) {
+          const dx = Math.floor((mx - inst.bbox.minX) * sxC);
+          const dy = Math.floor((my - inst.bbox.minY) * syC);
+          const dw = Math.max(1, Math.ceil(sxC));
+          const dh = Math.max(1, Math.ceil(syC));
+          ctx.fillStyle = `rgba(${cr},${cg},${cb},0.25)`;
+          ctx.fillRect(dx, dy, dw, dh);
+        }
+      }
+    }
+
+    // Draw raw skeleton pixels (full resolution)
+    const bright = `rgb(${Math.min(255, cr + 80)},${Math.min(255, cg + 80)},${Math.min(255, cb + 80)})`;
+    ctx.fillStyle = bright;
+    for (const pt of inst.rawSkeleton) {
+      const px = (pt.x - inst.bbox.minX) * sxC;
+      const py = (pt.y - inst.bbox.minY) * syC;
+      ctx.fillRect(Math.round(px), Math.round(py), Math.max(1, Math.ceil(sxC)), Math.max(1, Math.ceil(syC)));
+    }
+    // Draw simplified skeleton as dim white line
+    if (inst.skeleton.length >= 2) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+      ctx.lineWidth = 1;
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      const sp0 = inst.skeleton[0];
+      ctx.moveTo((sp0.x - inst.bbox.minX) * sxC, (sp0.y - inst.bbox.minY) * syC);
+      for (let si = 1; si < inst.skeleton.length; si++) {
+        const sp = inst.skeleton[si];
+        ctx.lineTo((sp.x - inst.bbox.minX) * sxC, (sp.y - inst.bbox.minY) * syC);
+      }
+      ctx.stroke();
+    }
+
+    card.appendChild(c);
+    const lbl = doc.createElement('div');
+    lbl.className = 'label';
+    lbl.textContent = `#${ci + 1} — ${inst.rawSkeleton.length} raw, ${inst.skeleton.length} simpl`;
+    card.appendChild(lbl);
+    const sc2 = doc.createElement('div');
+    sc2.className = 'score';
+    sc2.textContent = `mask: ${inst.area}px`;
+    card.appendChild(sc2);
+    row2.appendChild(card);
+  }
+
+  block.appendChild(row2);
+  container.insertBefore(block, container.firstChild);
+  win.scrollTo(0, 0);
+}

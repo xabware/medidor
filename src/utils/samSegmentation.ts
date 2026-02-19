@@ -468,27 +468,13 @@ export async function samDecodePoints(
   return { mask: allMasks[bestIdx], width: W, height: H, score: scores[bestIdx], allMasks, allScores: scores, allAreas };
 }
 
-/* ─── Mask analysis helpers ───────────────────────────────────────── */
+/* ─── Utility: invert a boolean mask ──────────────────────────────── */
 
-function getMaskBBox(mask: boolean[][]): { minX: number; minY: number; maxX: number; maxY: number } | null {
-  const H = mask.length;
-  if (H === 0) return null;
-  const W = mask[0].length;
-  let minX = W, minY = H, maxX = -1, maxY = -1;
-  for (let y = 0; y < H; y++) {
-    for (let x = 0; x < W; x++) {
-      if (mask[y][x]) {
-        if (x < minX) minX = x;
-        if (x > maxX) maxX = x;
-        if (y < minY) minY = y;
-        if (y > maxY) maxY = y;
-      }
-    }
-  }
-  return maxX < 0 ? null : { minX, minY, maxX, maxY };
+function invertMask(mask: boolean[][]): boolean[][] {
+  return mask.map(row => row.map(v => !v));
 }
 
-/* ─── Connected Component Analysis ────────────────────────────────── */
+/* ─── Connected Component Labeling ────────────────────────────────── */
 
 interface MaskComponent {
   /** Isolated boolean mask (same dimensions as source) with only this component */
@@ -500,7 +486,7 @@ interface MaskComponent {
 }
 
 /**
- * Label connected components in a boolean mask using flood-fill (4-connected).
+ * Label connected components in a boolean mask using BFS flood-fill (4-connected).
  * Returns an array of isolated components, sorted by area descending.
  */
 function extractComponents(mask: boolean[][]): MaskComponent[] {
@@ -508,27 +494,26 @@ function extractComponents(mask: boolean[][]): MaskComponent[] {
   if (H === 0) return [];
   const W = mask[0].length;
 
-  // Label grid: 0 = unlabeled/background, >0 = component id
   const labels = new Int32Array(H * W);
   let nextLabel = 1;
-  const compPixels = new Map<number, number>(); // label → area
+  const compPixels = new Map<number, number>();
   const compBBox = new Map<number, { minX: number; minY: number; maxX: number; maxY: number }>();
 
-  // BFS flood-fill
-  const queue: number[] = []; // flat indices
+  const queue: number[] = [];
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
       const idx = y * W + x;
       if (!mask[y][x] || labels[idx] !== 0) continue;
-      // Start new component
       const label = nextLabel++;
       labels[idx] = label;
+      queue.length = 0;
       queue.push(idx);
       let area = 0;
       let bMinX = x, bMinY = y, bMaxX = x, bMaxY = y;
+      let qi = 0;
 
-      while (queue.length > 0) {
-        const ci = queue.pop()!;
+      while (qi < queue.length) {
+        const ci = queue[qi++];
         const cy = (ci / W) | 0;
         const cx = ci % W;
         area++;
@@ -537,16 +522,14 @@ function extractComponents(mask: boolean[][]): MaskComponent[] {
         if (cy < bMinY) bMinY = cy;
         if (cy > bMaxY) bMaxY = cy;
 
-        // 4-connected neighbors
-        const neighbors = [
+        const nbrs = [
           cy > 0 ? ci - W : -1,
           cy < H - 1 ? ci + W : -1,
           cx > 0 ? ci - 1 : -1,
           cx < W - 1 ? ci + 1 : -1,
         ];
-        for (const ni of neighbors) {
-          if (ni < 0) continue;
-          if (labels[ni] !== 0) continue;
+        for (const ni of nbrs) {
+          if (ni < 0 || labels[ni] !== 0) continue;
           const ny = (ni / W) | 0;
           const nx = ni % W;
           if (!mask[ny][nx]) continue;
@@ -560,7 +543,6 @@ function extractComponents(mask: boolean[][]): MaskComponent[] {
     }
   }
 
-  // Build isolated masks per component
   const components: MaskComponent[] = [];
   for (const [label, area] of compPixels) {
     const bb = compBBox.get(label)!;
@@ -575,473 +557,401 @@ function extractComponents(mask: boolean[][]): MaskComponent[] {
     components.push({ mask: cm, area, bbox: bb });
   }
 
-  // Sort by area descending
   components.sort((a, b) => b.area - a.area);
   return components;
 }
 
-/* ─── Morphological erosion for splitting connected blobs ─────────── */
+/* ─── Skeletonization (Zhang-Suen thinning) ───────────────────────── */
 
-/**
- * Erode a boolean mask by `iterations` steps (4-connected).
- * Each iteration removes boundary pixels (pixels with at least one false neighbor).
- */
-function erodeMask(mask: boolean[][], iterations: number): boolean[][] {
-  const H = mask.length;
-  const W = mask[0]?.length ?? 0;
-  let current = mask;
-
-  for (let iter = 0; iter < iterations; iter++) {
-    const next: boolean[][] = Array.from({ length: H }, () => new Array<boolean>(W).fill(false));
-    for (let y = 1; y < H - 1; y++) {
-      for (let x = 1; x < W - 1; x++) {
-        if (current[y][x] && current[y - 1][x] && current[y + 1][x] && current[y][x - 1] && current[y][x + 1]) {
-          next[y][x] = true;
-        }
-      }
-    }
-    current = next;
-  }
-  return current;
+export interface SkeletonizedInstance {
+  mask: boolean[][];
+  area: number;
+  bbox: { minX: number; minY: number; maxX: number; maxY: number };
+  /** Simplified skeleton (~25 pts) for visualization */
+  skeleton: Array<{ x: number; y: number }>;
+  /** Full-resolution original skeleton (directly after thinning, without cleanup) */
+  rawSkeleton: Array<{ x: number; y: number }>;
 }
 
 /**
- * Given eroded seed components, expand them back into the original mask
- * using multi-source BFS. Each original-mask pixel gets assigned to the
- * nearest seed, effectively partitioning the mask along the erosion gaps.
+ * Zhang-Suen thinning algorithm.
+ * Takes a component's bounding box area and produces a 1-pixel-wide skeleton.
+ * Works on the cropped bbox for efficiency, then maps coords back.
  */
-function expandSeedsToOriginal(
-  seeds: MaskComponent[],
-  originalMask: boolean[][],
-  H: number,
-  W: number,
-): MaskComponent[] {
-  const labels = new Int32Array(H * W);
-  const queue: number[] = [];
+function skeletonize(comp: MaskComponent): { skeleton: Array<{ x: number; y: number }>; rawSkeleton: Array<{ x: number; y: number }> } {
+  const { minX, minY, maxX, maxY } = comp.bbox;
+  const bw = maxX - minX + 1;
+  const bh = maxY - minY + 1;
 
-  // Label all seed pixels
-  for (let si = 0; si < seeds.length; si++) {
-    for (let y = 0; y < H; y++) {
-      for (let x = 0; x < W; x++) {
-        if (seeds[si].mask[y]?.[x]) {
-          const idx = y * W + x;
-          labels[idx] = si + 1;
-          queue.push(idx);
-        }
+  // Build a working grid (1 = foreground, 0 = background)
+  // Pad by 1 pixel on each side so border checks are safe
+  const pw = bw + 2;
+  const ph = bh + 2;
+  const grid: Uint8Array[] = [];
+  for (let y = 0; y < ph; y++) {
+    grid[y] = new Uint8Array(pw);
+  }
+  for (let y = minY; y <= maxY; y++) {
+    for (let x = minX; x <= maxX; x++) {
+      if (comp.mask[y]?.[x]) {
+        grid[y - minY + 1][x - minX + 1] = 1;
       }
     }
   }
 
-  // Multi-source BFS — expand into unclaimed original-mask pixels
-  let qi = 0;
-  while (qi < queue.length) {
-    const idx = queue[qi++];
-    const y = (idx / W) | 0;
-    const x = idx % W;
-    const lbl = labels[idx];
+  // Zhang-Suen neighborhood indices (P2..P9 clockwise from top)
+  // P2=N, P3=NE, P4=E, P5=SE, P6=S, P7=SW, P8=W, P9=NW
+  const dy = [-1, -1, 0, 1, 1,  1,  0, -1];
+  const dx = [ 0,  1, 1, 1, 0, -1, -1, -1];
 
-    const offsets = [y > 0 ? -W : 0, y < H - 1 ? W : 0, x > 0 ? -1 : 0, x < W - 1 ? 1 : 0];
-    for (const off of offsets) {
-      if (off === 0) continue;
-      const ni = idx + off;
-      if (labels[ni] !== 0) continue;
-      const ny = (ni / W) | 0;
-      const nx = ni % W;
-      if (!originalMask[ny][nx]) continue;
-      labels[ni] = lbl;
-      queue.push(ni);
-    }
-  }
+  let changed = true;
+  while (changed) {
+    changed = false;
 
-  // Build MaskComponent per seed label
-  const results: MaskComponent[] = [];
-  for (let si = 0; si < seeds.length; si++) {
-    const lbl = si + 1;
-    let area = 0;
-    let bMinX = W, bMinY = H, bMaxX = 0, bMaxY = 0;
-    const cm: boolean[][] = Array.from({ length: H }, () => new Array<boolean>(W).fill(false));
-
-    for (let y = 0; y < H; y++) {
-      for (let x = 0; x < W; x++) {
-        if (labels[y * W + x] === lbl) {
-          cm[y][x] = true;
-          area++;
-          if (x < bMinX) bMinX = x;
-          if (x > bMaxX) bMaxX = x;
-          if (y < bMinY) bMinY = y;
-          if (y > bMaxY) bMaxY = y;
+    // Sub-iteration 1
+    const toRemove1: Array<[number, number]> = [];
+    for (let y = 1; y < ph - 1; y++) {
+      for (let x = 1; x < pw - 1; x++) {
+        if (!grid[y][x]) continue;
+        const p: number[] = [];
+        for (let i = 0; i < 8; i++) p[i] = grid[y + dy[i]][x + dx[i]];
+        const B = p.reduce((s, v) => s + v, 0); // number of non-zero neighbors
+        if (B < 2 || B > 6) continue;
+        // A = number of 0→1 transitions in the sequence P2,P3,...,P9,P2
+        let A = 0;
+        for (let i = 0; i < 8; i++) {
+          if (p[i] === 0 && p[(i + 1) % 8] === 1) A++;
         }
+        if (A !== 1) continue;
+        // Conditions for sub-iteration 1:
+        // P2 * P4 * P6 == 0  AND  P4 * P6 * P8 == 0
+        if (p[0] * p[2] * p[4] !== 0) continue;
+        if (p[2] * p[4] * p[6] !== 0) continue;
+        toRemove1.push([y, x]);
       }
     }
-    if (area > 0) {
-      results.push({ mask: cm, area, bbox: { minX: bMinX, minY: bMinY, maxX: bMaxX, maxY: bMaxY } });
-    }
-  }
-  return results;
-}
+    for (const [y, x] of toRemove1) { grid[y][x] = 0; changed = true; }
 
-/**
- * Try to split a large connected component into multiple roots via
- * progressive morphological erosion.  Tries 1→12 erosion iterations;
- * as soon as the eroded mask yields ≥ 2 components (each ≥ 2% of the
- * original), we expand them back into the original mask.
- */
-function splitLargeComponent(comp: MaskComponent): MaskComponent[] {
-  const H = comp.mask.length;
-  const W = comp.mask[0]?.length ?? 0;
-
-  for (let iters = 1; iters <= 12; iters++) {
-    const eroded = erodeMask(comp.mask, iters);
-    const erodedComps = extractComponents(eroded);
-    const minSeedArea = Math.max(10, comp.area * 0.02);
-    const seeds = erodedComps.filter(c => c.area >= minSeedArea);
-
-    if (seeds.length >= 2) {
-      console.log(`[SAM] erosion(${iters}): split into ${seeds.length} seeds (areas: ${seeds.map(s => s.area).join(',')})`);
-      return expandSeedsToOriginal(seeds, comp.mask, H, W);
-    }
-  }
-
-  // Couldn't split — return original component unchanged
-  return [comp];
-}
-
-/* ─── Root cluster detection ──────────────────────────────────────── */
-
-interface TaggedComponent extends MaskComponent {
-  maskIdx: number;
-}
-
-/**
- * Pool components from ALL masks, split large blobs via erosion,
- * cluster by area, deduplicate spatially.
- *
- * SAM may segment either the roots themselves (true pixels) or the
- * background/substrate (true pixels, roots = false pixels). We try
- * BOTH orientations (normal + inverted) for each mask and pick the
- * best overall cluster.
- *
- * Returns the final root components AND the raw per-mask components
- * (for debug visualization).
- */
-function findBestRootCluster(
-  allMasks: boolean[][][],
-  totalPixels: number,
-): {
-  components: MaskComponent[];
-  maskSources: number[];
-  rawPerMask: MaskComponent[][];
-} {
-  const allComps: TaggedComponent[] = [];
-  const rawPerMask: MaskComponent[][] = [];
-
-  // Large component threshold: anything above this % will be erosion-split
-  const splitThreshold = totalPixels * 0.15;
-
-  /** Invert a boolean mask */
-  const invertMask = (mask: boolean[][]): boolean[][] =>
-    mask.map(row => row.map(v => !v));
-
-  for (let mi = 0; mi < allMasks.length; mi++) {
-    // Extract components from BOTH the normal mask and its inverse
-    const normal = extractComponents(allMasks[mi]);
-    const inverted = extractComponents(invertMask(allMasks[mi]));
-
-    // Show both in raw debug — label inverted with suffix
-    const allRaw = [...normal, ...inverted];
-    rawPerMask.push(allRaw);
-
-    console.log(`[SAM] mask ${mi}: ${normal.length} normal + ${inverted.length} inverted components`);
-    console.log(`[SAM]   normal areas:   [${normal.slice(0, 6).map(c => c.area).join(', ')}]`);
-    console.log(`[SAM]   inverted areas: [${inverted.slice(0, 6).map(c => c.area).join(', ')}]`);
-
-    // Pool both orientations
-    for (const batch of [normal, inverted]) {
-      for (const c of batch) {
-        if (c.area > splitThreshold) {
-          console.log(`[SAM] mask ${mi}: large blob (${c.area}px = ${(c.area / totalPixels * 100).toFixed(1)}%), splitting via erosion…`);
-          const split = splitLargeComponent(c);
-          console.log(`[SAM] mask ${mi}: erosion produced ${split.length} sub-components`);
-          for (const sc of split) allComps.push({ ...sc, maskIdx: mi });
-        } else {
-          allComps.push({ ...c, maskIdx: mi });
+    // Sub-iteration 2
+    const toRemove2: Array<[number, number]> = [];
+    for (let y = 1; y < ph - 1; y++) {
+      for (let x = 1; x < pw - 1; x++) {
+        if (!grid[y][x]) continue;
+        const p: number[] = [];
+        for (let i = 0; i < 8; i++) p[i] = grid[y + dy[i]][x + dx[i]];
+        const B = p.reduce((s, v) => s + v, 0);
+        if (B < 2 || B > 6) continue;
+        let A = 0;
+        for (let i = 0; i < 8; i++) {
+          if (p[i] === 0 && p[(i + 1) % 8] === 1) A++;
         }
+        if (A !== 1) continue;
+        // Conditions for sub-iteration 2:
+        // P2 * P4 * P8 == 0  AND  P2 * P6 * P8 == 0
+        if (p[0] * p[2] * p[6] !== 0) continue;
+        if (p[0] * p[4] * p[6] !== 0) continue;
+        toRemove2.push([y, x]);
+      }
+    }
+    for (const [y, x] of toRemove2) { grid[y][x] = 0; changed = true; }
+  }
+
+  // Collect ORIGINAL skeleton pixels right after thinning (no cleanup)
+  const originalSkeleton: Array<{ x: number; y: number }> = [];
+  for (let y = 1; y < ph - 1; y++) {
+    for (let x = 1; x < pw - 1; x++) {
+      if (grid[y][x]) {
+        originalSkeleton.push({ x: (x - 1) + minX, y: (y - 1) + minY });
       }
     }
   }
 
-  console.log(`[SAM] total pooled components (normal + inverted, after erosion): ${allComps.length}`);
+  // ─── Spur pruning: iteratively remove short branches ───
+  // An endpoint has exactly 1 neighbor (8-connected).
+  // Trace from each endpoint; if the branch length < threshold before
+  // hitting a junction (≥3 neighbors), remove it.
+  const spurThreshold = Math.max(5, Math.round(Math.max(bw, bh) * 0.08));
 
-  // Filter: remove tiny noise (but NO upper limit since we already split large ones)
-  const absMinArea = Math.max(50, totalPixels * 0.0003);
-  const viable = allComps.filter(c => {
-    if (c.area < absMinArea) return false;
-    const bw = c.bbox.maxX - c.bbox.minX + 1;
-    const bh = c.bbox.maxY - c.bbox.minY + 1;
-    const aspect = Math.max(bw, bh) / Math.max(1, Math.min(bw, bh));
-    if (aspect < 1.3) return false; // relaxed from 1.5
-    return true;
-  });
-
-  console.log(`[SAM] after basic filter: ${viable.length} viable components`);
-
-  if (viable.length === 0) {
-    return { components: [], maskSources: [], rawPerMask };
-  }
-
-  // Sort by area
-  viable.sort((a, b) => a.area - b.area);
-
-  // Sliding window: find the widest window where max/min area ratio ≤ R
-  const R = 8; // relaxed from 5
-  let bestStart = 0, bestEnd = 0;
-  let start = 0;
-  for (let end = 0; end < viable.length; end++) {
-    while (viable[end].area > viable[start].area * R) start++;
-    if (end - start > bestEnd - bestStart) {
-      bestStart = start;
-      bestEnd = end;
+  const neighbors8 = (gy: number, gx: number): number => {
+    let n = 0;
+    for (let i = 0; i < 8; i++) {
+      if (grid[gy + dy[i]][gx + dx[i]]) n++;
     }
-  }
-
-  const cluster = viable.slice(bestStart, bestEnd + 1);
-  console.log(`[SAM] cluster: ${cluster.length} components, area range ${cluster[0]?.area}–${cluster[cluster.length - 1]?.area}px`);
-
-  // Deduplicate spatially: overlapping bbox → same root from different masks → keep larger
-  const deduped: TaggedComponent[] = [];
-  for (const comp of cluster) {
-    const overlapIdx = deduped.findIndex(existing => {
-      const ox = Math.max(existing.bbox.minX, comp.bbox.minX);
-      const oy = Math.max(existing.bbox.minY, comp.bbox.minY);
-      const ex = Math.min(existing.bbox.maxX, comp.bbox.maxX);
-      const ey = Math.min(existing.bbox.maxY, comp.bbox.maxY);
-      if (ex <= ox || ey <= oy) return false;
-      const overlapArea = (ex - ox) * (ey - oy);
-      const smallerBBoxArea = Math.min(
-        (existing.bbox.maxX - existing.bbox.minX) * (existing.bbox.maxY - existing.bbox.minY),
-        (comp.bbox.maxX - comp.bbox.minX) * (comp.bbox.maxY - comp.bbox.minY),
-      );
-      return overlapArea / Math.max(1, smallerBBoxArea) > 0.4;
-    });
-
-    if (overlapIdx >= 0) {
-      if (comp.area > deduped[overlapIdx].area) deduped[overlapIdx] = comp;
-    } else {
-      deduped.push(comp);
-    }
-  }
-
-  console.log(`[SAM] after dedup: ${deduped.length} unique root components`);
-  return {
-    components: deduped,
-    maskSources: deduped.map(c => c.maskIdx),
-    rawPerMask,
+    return n;
   };
-}
 
-/* ─── Path utilities ──────────────────────────────────────────────── */
-
-function perpDist(p: DrawingPoint, a: DrawingPoint, b: DrawingPoint): number {
-  const dx = b.x - a.x;
-  const dy = b.y - a.y;
-  const lenSq = dx * dx + dy * dy;
-  if (lenSq === 0) return Math.hypot(p.x - a.x, p.y - a.y);
-  return Math.abs(dy * p.x - dx * p.y + b.x * a.y - b.y * a.x) / Math.sqrt(lenSq);
-}
-
-/** Douglas-Peucker path simplification. */
-function simplifyPath(pts: DrawingPoint[], epsilon: number): DrawingPoint[] {
-  if (pts.length <= 2) return [...pts];
-  let maxD = 0, maxI = 0;
-  const first = pts[0], last = pts[pts.length - 1];
-  for (let i = 1; i < pts.length - 1; i++) {
-    const d = perpDist(pts[i], first, last);
-    if (d > maxD) { maxD = d; maxI = i; }
-  }
-  if (maxD > epsilon) {
-    const left = simplifyPath(pts.slice(0, maxI + 1), epsilon);
-    const right = simplifyPath(pts.slice(maxI), epsilon);
-    return [...left.slice(0, -1), ...right];
-  }
-  return [first, last];
-}
-
-/** Sample N points uniformly along a polyline. */
-function sampleAlongPath(pts: DrawingPoint[], n: number): DrawingPoint[] {
-  if (pts.length <= 1 || n <= 1) return pts.length ? [pts[0]] : [];
-  let total = 0;
-  const segs: number[] = [];
-  for (let i = 1; i < pts.length; i++) {
-    const l = Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
-    segs.push(l);
-    total += l;
-  }
-  if (total === 0) return [pts[0]];
-  const step = total / (n - 1);
-  const out: DrawingPoint[] = [];
-  for (let i = 0; i < n; i++) {
-    const target = i * step;
-    let acc = 0;
-    for (let s = 0; s < segs.length; s++) {
-      if (acc + segs[s] >= target || s === segs.length - 1) {
-        const t = segs[s] > 0 ? Math.min(1, (target - acc) / segs[s]) : 0;
-        out.push({
-          x: pts[s].x + t * (pts[s + 1].x - pts[s].x),
-          y: pts[s].y + t * (pts[s + 1].y - pts[s].y),
-        });
-        break;
+  let pruned = true;
+  while (pruned) {
+    pruned = false;
+    // Find all current endpoints
+    for (let y = 1; y < ph - 1; y++) {
+      for (let x = 1; x < pw - 1; x++) {
+        if (!grid[y][x]) continue;
+        if (neighbors8(y, x) !== 1) continue;
+        // Trace the branch from this endpoint
+        const branch: Array<[number, number]> = [[y, x]];
+        let cy = y, cx = x;
+        let prevY = -1, prevX = -1;
+        let isJunction = false;
+        while (branch.length <= spurThreshold) {
+          // Find the next pixel (neighbor that isn't prev)
+          let ny = -1, nx = -1, nCount = 0;
+          for (let i = 0; i < 8; i++) {
+            const ty = cy + dy[i], tx = cx + dx[i];
+            if (!grid[ty][tx]) continue;
+            if (ty === prevY && tx === prevX) continue;
+            nCount++;
+            ny = ty; nx = tx;
+          }
+          if (nCount === 0) break; // isolated endpoint — don't remove
+          if (nCount >= 2) { isJunction = true; break; } // reached a junction
+          branch.push([ny, nx]);
+          prevY = cy; prevX = cx;
+          cy = ny; cx = nx;
+        }
+        // Only prune if we reached a junction within the threshold
+        if (isJunction && branch.length <= spurThreshold) {
+          // Remove branch pixels (but not the junction pixel itself)
+          for (const [by, bx] of branch) {
+            grid[by][bx] = 0;
+          }
+          pruned = true;
+        }
       }
-      acc += segs[s];
     }
   }
-  return out;
+
+  // Collect cleaned skeleton pixels, mapping back to original coords
+  const cleanedSkeleton: Array<{ x: number; y: number }> = [];
+  for (let y = 1; y < ph - 1; y++) {
+    for (let x = 1; x < pw - 1; x++) {
+      if (grid[y][x]) {
+        cleanedSkeleton.push({ x: (x - 1) + minX, y: (y - 1) + minY });
+      }
+    }
+  }
+
+  // ─── Extract longest path (eliminate remaining branches) ───
+  const longestPath = extractLongestPath(cleanedSkeleton);
+
+  // ─── Simplify to ~targetPoints using Ramer-Douglas-Peucker ───
+  const targetPoints = 25;
+  const simplified = simplifyPath(longestPath, targetPoints);
+
+  return { skeleton: simplified, rawSkeleton: originalSkeleton };
 }
 
 /**
- * Convert a binary mask to a centerline path (full-image coords).
- * Scans along the primary axis, taking the center of each cross-section.
+ * Build a graph from skeleton pixels (8-connected neighbors within 1px),
+ * find the two endpoints of the longest path via double-BFS, then return
+ * the ordered path between them.
  */
-function maskToCenterline(mask: boolean[][], roiX: number, roiY: number): DrawingPoint[] {
-  const bbox = getMaskBBox(mask);
-  if (!bbox) return [];
-  const bw = bbox.maxX - bbox.minX + 1;
-  const bh = bbox.maxY - bbox.minY + 1;
-  const vertical = bh >= bw;
+function extractLongestPath(
+  points: Array<{ x: number; y: number }>
+): Array<{ x: number; y: number }> {
+  if (points.length <= 2) return points;
 
-  const raw: DrawingPoint[] = [];
-  if (vertical) {
-    for (let y = bbox.minY; y <= bbox.maxY; y++) {
-      let sx = 0, cnt = 0;
-      for (let x = bbox.minX; x <= bbox.maxX; x++) {
-        if (mask[y][x]) { sx += x; cnt++; }
+  // Build adjacency via a spatial lookup
+  const key = (x: number, y: number) => `${x},${y}`;
+  const ptSet = new Set<string>();
+  const ptMap = new Map<string, number>(); // key → index
+  for (let i = 0; i < points.length; i++) {
+    const k = key(points[i].x, points[i].y);
+    ptSet.add(k);
+    ptMap.set(k, i);
+  }
+
+  const adj: number[][] = Array.from({ length: points.length }, () => []);
+  for (let i = 0; i < points.length; i++) {
+    const { x, y } = points[i];
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dy === 0) continue;
+        const nk = key(x + dx, y + dy);
+        const ni = ptMap.get(nk);
+        if (ni !== undefined) adj[i].push(ni);
       }
-      if (cnt) raw.push({ x: sx / cnt + roiX, y: y + roiY });
-    }
-  } else {
-    for (let x = bbox.minX; x <= bbox.maxX; x++) {
-      let sy = 0, cnt = 0;
-      for (let y = bbox.minY; y <= bbox.maxY; y++) {
-        if (mask[y][x]) { sy += y; cnt++; }
-      }
-      if (cnt) raw.push({ x: x + roiX, y: sy / cnt + roiY });
     }
   }
-  return simplifyPath(raw, 1.5);
+
+  // BFS from a node, returns [farthest node index, dist array]
+  const bfs = (start: number): [number, Int32Array] => {
+    const dist = new Int32Array(points.length).fill(-1);
+    dist[start] = 0;
+    const queue = [start];
+    let head = 0;
+    let farthest = start;
+    while (head < queue.length) {
+      const u = queue[head++];
+      for (const v of adj[u]) {
+        if (dist[v] === -1) {
+          dist[v] = dist[u] + 1;
+          queue.push(v);
+          if (dist[v] > dist[farthest]) farthest = v;
+        }
+      }
+    }
+    return [farthest, dist];
+  };
+
+  // Double BFS to find the diameter (longest shortest-path)
+  const [endA] = bfs(0);
+  const [endB, distFromA] = bfs(endA);
+
+  // Reconstruct path from endA to endB via BFS parent tracking
+  const parent = new Int32Array(points.length).fill(-1);
+  const visited = new Uint8Array(points.length);
+  visited[endA] = 1;
+  const queue = [endA];
+  let head = 0;
+  while (head < queue.length) {
+    const u = queue[head++];
+    if (u === endB) break;
+    for (const v of adj[u]) {
+      if (!visited[v]) {
+        visited[v] = 1;
+        parent[v] = u;
+        queue.push(v);
+      }
+    }
+  }
+
+  const path: Array<{ x: number; y: number }> = [];
+  let cur = endB;
+  while (cur !== -1) {
+    path.push(points[cur]);
+    cur = parent[cur];
+  }
+  path.reverse();
+
+  // If the graph is disconnected, path might be short; fall back to raw
+  if (path.length < 2) return points;
+  void distFromA; // suppress unused
+
+  return path;
+}
+
+/**
+ * Ramer-Douglas-Peucker line simplification.
+ * Automatically finds the epsilon that yields ~targetN points.
+ */
+function simplifyPath(
+  points: Array<{ x: number; y: number }>,
+  targetN: number
+): Array<{ x: number; y: number }> {
+  if (points.length <= targetN) return points;
+
+  // Perpendicular distance from point to line(a, b)
+  const perpDist = (
+    p: { x: number; y: number },
+    a: { x: number; y: number },
+    b: { x: number; y: number }
+  ): number => {
+    const dxAB = b.x - a.x, dyAB = b.y - a.y;
+    const lenSq = dxAB * dxAB + dyAB * dyAB;
+    if (lenSq === 0) return Math.hypot(p.x - a.x, p.y - a.y);
+    const t = ((p.x - a.x) * dxAB + (p.y - a.y) * dyAB) / lenSq;
+    const projX = a.x + t * dxAB, projY = a.y + t * dyAB;
+    return Math.hypot(p.x - projX, p.y - projY);
+  };
+
+  const rdp = (
+    pts: Array<{ x: number; y: number }>,
+    eps: number
+  ): Array<{ x: number; y: number }> => {
+    if (pts.length <= 2) return pts;
+    let maxD = 0, maxI = 0;
+    const first = pts[0], last = pts[pts.length - 1];
+    for (let i = 1; i < pts.length - 1; i++) {
+      const d = perpDist(pts[i], first, last);
+      if (d > maxD) { maxD = d; maxI = i; }
+    }
+    if (maxD > eps) {
+      const left = rdp(pts.slice(0, maxI + 1), eps);
+      const right = rdp(pts.slice(maxI), eps);
+      return left.slice(0, -1).concat(right);
+    }
+    return [first, last];
+  };
+
+  // Binary search for the epsilon that yields ~targetN points
+  let lo = 0, hi = 0;
+  // Find upper bound for epsilon
+  for (let i = 0; i < points.length; i++) {
+    const d = perpDist(points[i], points[0], points[points.length - 1]);
+    if (d > hi) hi = d;
+  }
+  hi *= 2;
+
+  let best = points;
+  for (let iter = 0; iter < 40; iter++) {
+    const mid = (lo + hi) / 2;
+    const result = rdp(points, mid);
+    if (result.length > targetN) {
+      lo = mid;
+    } else {
+      hi = mid;
+      best = result;
+    }
+    if (Math.abs(result.length - targetN) <= 2) { best = result; break; }
+  }
+
+  return best;
 }
 
 /* ─── Public root-detection API ───────────────────────────────────── */
 
-/** Mean distance from each point in `testPath` to the nearest point in `refPath`. */
-function meanDistToPath(testPath: DrawingPoint[], refPath: DrawingPoint[]): number {
-  if (testPath.length === 0 || refPath.length === 0) return Infinity;
-  let total = 0;
-  for (const p of testPath) {
-    let best = Infinity;
-    for (const r of refPath) {
-      const d = Math.hypot(p.x - r.x, p.y - r.y);
-      if (d < best) best = d;
-    }
-    total += best;
-  }
-  return total / testPath.length;
+/** A candidate mask (inverted = roots are true) for user selection. */
+export interface MaskCandidate {
+  idx: number;
+  /** Inverted mask (roots = true) */
+  mask: boolean[][];
+  /** Pixel count of root area */
+  rootArea: number;
+  /** Root area as fraction of total */
+  rootPct: number;
+  /** Connected components above noise threshold */
+  numComps: number;
+  /** Mean area of those components */
+  avgCompArea: number;
+  /** Original SAM IoU score */
+  iouScore: number;
+  /** Mask dimensions */
+  maskH: number;
+  maskW: number;
+}
+
+/** Result of computing mask candidates (phase 1). */
+export interface MaskCandidatesResult {
+  candidates: MaskCandidate[];
+  /** Raw SAM result dimensions */
+  maskH: number;
+  maskW: number;
+  /** ROI dimensions */
+  roiW: number;
+  roiH: number;
+}
+
+/** Result of processing a chosen mask (phase 2). */
+export interface ProcessedMaskResult {
+  rootsMask: boolean[][];
+  rootsArea: number;
+  instances: SkeletonizedInstance[];
+  maskH: number;
+  maskW: number;
+  roiW: number;
+  roiH: number;
 }
 
 /**
- * Refine a user-drawn freehand path using SAM point prompts.
- * 
- * Gets all SAM masks, extracts components from each, finds the component
- * closest to the user's drawn path across all masks.
- *
- * `drawnPoints` and the returned path are in **full-image** coordinates.
+ * Phase 1: Compute SAM masks using TWO different point configurations
+ * and return all 6 inverted candidates for user selection.
  */
-export async function refineDrawnPath(
-  imageId: string,
-  drawnPoints: DrawingPoint[],
-  roi: ROIRegion,
-): Promise<DrawingPoint[] | null> {
-  if (drawnPoints.length < 2) return null;
-
-  const roiW = Math.round(roi.width);
-  const roiH = Math.round(roi.height);
-
-  /* Convert to ROI-relative coords */
-  const roiPts = drawnPoints.map(p => ({ x: p.x - roi.x, y: p.y - roi.y }));
-
-  const numFg = Math.min(12, Math.max(4, Math.ceil(drawnPoints.length / 15)));
-  const fgSampled = sampleAlongPath(roiPts, numFg);
-
-  const bgCorners: DrawingPoint[] = [
-    { x: 2, y: 2 }, { x: roiW - 3, y: 2 },
-    { x: 2, y: roiH - 3 }, { x: roiW - 3, y: roiH - 3 },
-  ];
-
-  const clamp = (p: { x: number; y: number }) => ({
-    x: Math.max(0, Math.min(roiW - 1, p.x)),
-    y: Math.max(0, Math.min(roiH - 1, p.y)),
-  });
-  const fg = fgSampled.map(clamp);
-
-  /* SAM call */
-  const result = await samDecodePoints(imageId, fg, bgCorners);
-  if (!result) return null;
-
-  /* Search ALL masks → ALL components → pick the closest to the drawn path */
-  const totalPx = result.height * result.width;
-  const minCompArea = Math.max(50, totalPx * 0.0003);
-  let bestCL: DrawingPoint[] | null = null;
-  let bestDist = Infinity;
-
-  for (let mi = 0; mi < result.allMasks.length; mi++) {
-    const components = extractComponents(result.allMasks[mi]);
-    for (const comp of components) {
-      if (comp.area < minCompArea) continue;
-      const bw = comp.bbox.maxX - comp.bbox.minX + 1;
-      const bh = comp.bbox.maxY - comp.bbox.minY + 1;
-      if (Math.max(bw, bh) / Math.max(1, Math.min(bw, bh)) < 1.5) continue;
-
-      const cl = maskToCenterline(comp.mask, 0, 0);
-      if (cl.length < 2) continue;
-
-      const dist = meanDistToPath(cl, roiPts);
-      if (dist < bestDist) {
-        bestDist = dist;
-        bestCL = cl;
-      }
-    }
-  }
-
-  if (!bestCL) return null;
-
-  const pathLen = (() => {
-    let l = 0;
-    for (let i = 1; i < roiPts.length; i++) l += Math.hypot(roiPts[i].x - roiPts[i - 1].x, roiPts[i].y - roiPts[i - 1].y);
-    return l;
-  })();
-  const tolerance = Math.max(50, pathLen * 0.35);
-  if (bestDist > tolerance) return null;
-
-  return bestCL.map(p => ({ x: p.x + roi.x, y: p.y + roi.y }));
-}
-
-/**
- * Automatically detect roots inside the ROI.
- *
- * Strategy:
- * 1. Make a single SAM call with a grid of foreground points → get 3 masks.
- * 2. For EACH mask, extract connected components (independent surfaces).
- * 3. Pool ALL components from all 3 masks together.
- * 4. Cluster them by area: find the largest group of similarly-sized components
- *    (sliding window where max/min ratio ≤ 5×).
- * 5. Deduplicate spatially (overlapping bbox = same root from different masks).
- * 6. Each resulting component = one root → extract its centerline as a measurement.
- *
- * Returns an array of centerline paths in **full-image** coordinates.
- */
-export async function autoDetectRoots(
+export async function computeMaskCandidates(
   imageId: string,
   roi: ROIRegion,
   onProgress?: (pct: number, msg: string) => void,
-): Promise<DrawingPoint[][]> {
+): Promise<MaskCandidatesResult> {
   if (!getCachedEmbeddings(imageId) || !model || !processor) {
     throw new Error('Embeddings no calculados');
   }
@@ -1049,64 +959,397 @@ export async function autoDetectRoots(
   const roiW = Math.round(roi.width);
   const roiH = Math.round(roi.height);
 
-  onProgress?.(5, 'Obteniendo máscaras de SAM…');
+  /* ── Run A: regular grid + 4 bg corners ─────────────────────────── */
+  onProgress?.(5, 'Obteniendo máscaras de SAM (1/2)…');
 
-  /* Grid of foreground points across ROI */
-  const numCols = Math.max(3, Math.min(8, Math.round(roiW / 60)));
-  const numRows = Math.max(3, Math.min(6, Math.round(roiH / 80)));
-  const fg: Array<{ x: number; y: number }> = [];
-  for (let r = 0; r < numRows; r++) {
-    for (let c = 0; c < numCols; c++) {
-      fg.push({
-        x: roiW * (c + 1) / (numCols + 1),
-        y: roiH * (r + 1) / (numRows + 1),
+  const numColsA = Math.max(3, Math.min(8, Math.round(roiW / 60)));
+  const numRowsA = Math.max(3, Math.min(6, Math.round(roiH / 80)));
+  const fgA: Array<{ x: number; y: number }> = [];
+  for (let r = 0; r < numRowsA; r++) {
+    for (let c = 0; c < numColsA; c++) {
+      fgA.push({
+        x: roiW * (c + 1) / (numColsA + 1),
+        y: roiH * (r + 1) / (numRowsA + 1),
       });
     }
   }
-  const bgCorners = [
+  const bgCornersA = [
     { x: 2, y: 2 }, { x: roiW - 3, y: 2 },
     { x: 2, y: roiH - 3 }, { x: roiW - 3, y: roiH - 3 },
   ];
 
-  const res = await samDecodePoints(imageId, fg, bgCorners);
-  if (!res) { onProgress?.(100, 'No se obtuvo máscara'); return []; }
+  const resA = await samDecodePoints(imageId, fgA, bgCornersA);
+  if (!resA) { throw new Error('No se obtuvo máscara de SAM (run A)'); }
 
-  onProgress?.(30, 'Extrayendo componentes de las 3 máscaras…');
+  /* ── Run B: offset / sparser grid, no bg corners ────────────────── */
+  onProgress?.(25, 'Obteniendo máscaras de SAM (2/2)…');
+
+  const numColsB = Math.max(2, Math.min(6, Math.round(roiW / 90)));
+  const numRowsB = Math.max(2, Math.min(5, Math.round(roiH / 100)));
+  const fgB: Array<{ x: number; y: number }> = [];
+  for (let r = 0; r < numRowsB; r++) {
+    for (let c = 0; c < numColsB; c++) {
+      fgB.push({
+        x: roiW * (c + 0.5) / (numColsB),
+        y: roiH * (r + 0.5) / (numRowsB),
+      });
+    }
+  }
+  // Run B: no background points — lets SAM decide freely
+  const resB = await samDecodePoints(imageId, fgB, []);
+  if (!resB) { throw new Error('No se obtuvo máscara de SAM (run B)'); }
+
+  onProgress?.(45, 'Analizando máscaras…');
   await new Promise(r => setTimeout(r, 0));
 
-  /* Pool components from ALL masks and cluster by area */
-  const totalPx = res.height * res.width;
-  const { components: rootComps, maskSources, rawPerMask } = findBestRootCluster(res.allMasks, totalPx);
+  /* ── Analyse all masks from both runs ───────────────────────────── */
+  const allRuns: Array<{ res: SAMDecodeResult; label: string }> = [
+    { res: resA, label: 'A' },
+    { res: resB, label: 'B' },
+  ];
 
-  console.log(`[SAM] auto-detect: ${rootComps.length} roots from masks [${[...new Set(maskSources)].join(',')}]`);
+  const candidates: MaskCandidate[] = [];
+  let globalIdx = 0;
 
-  onProgress?.(60, `Encontrados ${rootComps.length} componentes raíz`);
+  for (const { res, label } of allRuns) {
+    const totalPx = res.height * res.width;
+    const noiseThreshold = Math.max(20, totalPx * 0.0005);
 
-  /* Debug visualization — show full pipeline: raw per-mask → final */
-  if (isDebugEnabled()) {
-    try {
-      const { debugVisualizeExtraction } = await import('./samDebugVisualizer');
-      debugVisualizeExtraction({
-        roiWidth: roiW,
-        roiHeight: roiH,
+    for (let i = 0; i < res.allMasks.length; i++) {
+      const inverted = invertMask(res.allMasks[i]);
+      const rootArea = totalPx - res.allAreas[i];
+      const rootPct = rootArea / totalPx;
+
+      // Quick connected-component count on the inverted mask
+      const H = res.height, W = res.width;
+      const visited = new Uint8Array(H * W);
+      let numComps = 0;
+      let totalCompArea = 0;
+      const queue: number[] = [];
+
+      for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+          const idx = y * W + x;
+          if (!inverted[y][x] || visited[idx]) continue;
+          visited[idx] = 1;
+          queue.length = 0;
+          queue.push(idx);
+          let area = 0;
+          let qi = 0;
+          while (qi < queue.length) {
+            const ci = queue[qi++];
+            area++;
+            const cy = (ci / W) | 0;
+            const cx = ci % W;
+            const nbrs = [
+              cy > 0 ? ci - W : -1,
+              cy < H - 1 ? ci + W : -1,
+              cx > 0 ? ci - 1 : -1,
+              cx < W - 1 ? ci + 1 : -1,
+            ];
+            for (const ni of nbrs) {
+              if (ni < 0 || visited[ni]) continue;
+              const ny = (ni / W) | 0;
+              const nx = ni % W;
+              if (!inverted[ny][nx]) continue;
+              visited[ni] = 1;
+              queue.push(ni);
+            }
+          }
+          if (area >= noiseThreshold) {
+            numComps++;
+            totalCompArea += area;
+          }
+        }
+      }
+
+      const avgCompArea = numComps > 0 ? totalCompArea / numComps : 0;
+
+      candidates.push({
+        idx: globalIdx++,
+        mask: inverted,
+        rootArea,
+        rootPct,
+        numComps,
+        avgCompArea,
+        iouScore: res.allScores[i],
         maskH: res.height,
         maskW: res.width,
-        rawPerMask,
-        finalComponents: rootComps,
+      });
+
+      console.log(`[SAM] candidate ${label}${i} (idx=${globalIdx - 1}): rootArea=${rootArea} (${(rootPct * 100).toFixed(1)}%), comps=${numComps}, avgArea=${Math.round(avgCompArea)}, iou=${res.allScores[i].toFixed(3)}`);
+    }
+  }
+
+  onProgress?.(60, `${candidates.length} máscaras listas para elegir`);
+
+  /* Debug visualization (show run A masks only for backward compat) */
+  if (isDebugEnabled()) {
+    try {
+      const { debugVisualizeRootsMask } = await import('./samDebugVisualizer');
+      debugVisualizeRootsMask({
+        roiWidth: roiW,
+        roiHeight: roiH,
+        maskH: resA.height,
+        maskW: resA.width,
+        allMasks: resA.allMasks,
+        allAreas: resA.allAreas,
+        scores: resA.allScores,
+        chosenMaskIdx: -1,
+        rootsMask: candidates[0].mask,
+        rootsArea: candidates[0].rootArea,
         roiImageUrl: getDebugROIImageUrl() ?? undefined,
       });
     } catch (e) { console.warn('[SAM Debug] viz error:', e); }
   }
 
-  onProgress?.(80, 'Extrayendo líneas centrales…');
+  return { candidates, maskH: resA.height, maskW: resA.width, roiW, roiH };
+}
 
-  /* Extract centerline for each root component */
-  const centerlines: DrawingPoint[][] = [];
-  for (const comp of rootComps) {
-    const cl = maskToCenterline(comp.mask, roi.x, roi.y);
-    if (cl.length >= 2) centerlines.push(cl);
+/**
+ * Phase 2: Process a user-chosen mask — border cleanup, instance segmentation, skeletonization.
+ */
+export async function processChosenMask(
+  candidate: MaskCandidate,
+  roiW: number,
+  roiH: number,
+  onProgress?: (pct: number, msg: string) => void,
+): Promise<ProcessedMaskResult> {
+  const { maskH, maskW } = candidate;
+  let rootsMask = candidate.mask; // already inverted
+
+  onProgress?.(10, 'Limpiando bordes…');
+
+  /* Trim a fixed border strip (~10 px) instead of removing full border-connected regions */
+  {
+    const H = maskH, W = maskW;
+    const borderPad = Math.max(1, Math.min(10, Math.floor(Math.min(H, W) / 2)));
+    let removed = 0;
+    const cleaned: boolean[][] = [];
+    for (let y = 0; y < H; y++) {
+      const row: boolean[] = new Array(W);
+      for (let x = 0; x < W; x++) {
+        const inBorderStrip =
+          y < borderPad || y >= H - borderPad ||
+          x < borderPad || x >= W - borderPad;
+        if (inBorderStrip && rootsMask[y][x]) {
+          row[x] = false;
+          removed++;
+        } else {
+          row[x] = rootsMask[y][x];
+        }
+      }
+      cleaned.push(row);
+    }
+    rootsMask = cleaned;
+    console.log(`[SAM] border cleanup (strip=${borderPad}px): removed ${removed} pixels`);
   }
 
-  onProgress?.(100, `Detectadas ${centerlines.length} raíces`);
-  return centerlines;
+  const rootsArea = rootsMask.reduce((sum, row) => sum + row.filter(Boolean).length, 0);
+  const totalPx = maskH * maskW;
+
+  onProgress?.(30, 'Separando instancias…');
+  await new Promise(r => setTimeout(r, 0));
+
+  const components = extractComponents(rootsMask);
+  const minInstanceArea = Math.max(20, totalPx * 0.0003);
+  const rootInstances = components.filter(c => c.area >= minInstanceArea);
+
+  console.log(`[SAM] instances: ${components.length} → ${rootInstances.length} after noise filter`);
+
+  onProgress?.(60, 'Calculando esqueletos…');
+  await new Promise(r => setTimeout(r, 0));
+
+  const skelInstances: SkeletonizedInstance[] = rootInstances.map((inst, i) => {
+    const { skeleton, rawSkeleton } = skeletonize(inst);
+    console.log(`  [${i}] area=${inst.area} skeleton=${skeleton.length}pts rawSkeleton=${rawSkeleton.length}pts`);
+    return { ...inst, skeleton, rawSkeleton };
+  });
+
+  onProgress?.(90, `${skelInstances.length} esqueletos calculados`);
+
+  /* Debug visualization */
+  if (isDebugEnabled()) {
+    try {
+      const { debugVisualizeInstances, debugVisualizeSkeletons } = await import('./samDebugVisualizer');
+      debugVisualizeInstances({
+        roiWidth: roiW, roiHeight: roiH,
+        maskH, maskW,
+        instances: rootInstances,
+        roiImageUrl: getDebugROIImageUrl() ?? undefined,
+      });
+      debugVisualizeSkeletons({
+        roiWidth: roiW, roiHeight: roiH,
+        maskH, maskW,
+        instances: skelInstances,
+        roiImageUrl: getDebugROIImageUrl() ?? undefined,
+      });
+    } catch (e) { console.warn('[SAM Debug] viz error:', e); }
+  }
+
+  onProgress?.(100, 'Listo');
+  return { rootsMask, rootsArea, instances: skelInstances, maskH, maskW, roiW, roiH };
+}
+
+/**
+ * Snap a user-drawn path to the nearest skeleton.
+ * Finds the skeleton whose path is closest to the drawn line,
+ * then returns the sub-section of that skeleton between the
+ * start and end projections.
+ *
+ * All coordinates are in mask space — caller must convert to/from image coords.
+ */
+export function snapToSkeleton(
+  drawnPoints: Array<{ x: number; y: number }>,
+  skeletons: SkeletonizedInstance[],
+): Array<{ x: number; y: number }> | null {
+  if (drawnPoints.length < 2 || skeletons.length === 0) return null;
+
+  const drawStart = drawnPoints[0];
+  const drawEnd = drawnPoints[drawnPoints.length - 1];
+
+  // For each skeleton, find the closest point to the start and end of the drawn line
+  // and compute a valid graph path on the ORIGINAL (unpruned) skeleton.
+  let bestSkel: SkeletonizedInstance | null = null;
+  let bestPath: Array<{ x: number; y: number }> | null = null;
+  let bestStartIdx = 0;
+  let bestEndIdx = 0;
+  let bestDist = Infinity;
+
+  const buildAdjacency = (points: Array<{ x: number; y: number }>): number[][] => {
+    const key = (x: number, y: number) => `${x},${y}`;
+    const ptMap = new Map<string, number>();
+    for (let i = 0; i < points.length; i++) {
+      ptMap.set(key(points[i].x, points[i].y), i);
+    }
+
+    const adj: number[][] = Array.from({ length: points.length }, () => []);
+    for (let i = 0; i < points.length; i++) {
+      const { x, y } = points[i];
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          const ni = ptMap.get(key(x + dx, y + dy));
+          if (ni !== undefined) adj[i].push(ni);
+        }
+      }
+    }
+    return adj;
+  };
+
+  const shortestPath = (
+    points: Array<{ x: number; y: number }>,
+    adj: number[][],
+    startIdx: number,
+    endIdx: number,
+  ): Array<{ x: number; y: number }> | null => {
+    if (startIdx === endIdx) return [points[startIdx]];
+
+    const parent = new Int32Array(points.length).fill(-1);
+    const visited = new Uint8Array(points.length);
+    const queue: number[] = [startIdx];
+    visited[startIdx] = 1;
+
+    let head = 0;
+    while (head < queue.length) {
+      const u = queue[head++];
+      if (u === endIdx) break;
+      for (const v of adj[u]) {
+        if (!visited[v]) {
+          visited[v] = 1;
+          parent[v] = u;
+          queue.push(v);
+        }
+      }
+    }
+
+    if (!visited[endIdx]) return null;
+
+    const path: Array<{ x: number; y: number }> = [];
+    let cur = endIdx;
+    while (cur !== -1) {
+      path.push(points[cur]);
+      cur = parent[cur];
+    }
+    path.reverse();
+    return path;
+  };
+
+  for (const skel of skeletons) {
+    // Use original (full-resolution, unpruned) skeleton for snapping
+    const raw = skel.rawSkeleton;
+    if (raw.length < 2) continue;
+    const adj = buildAdjacency(raw);
+
+    // Find closest skeleton point to drawn start
+    let sIdx = 0, sMinD = Infinity;
+    for (let i = 0; i < raw.length; i++) {
+      const d = Math.hypot(raw[i].x - drawStart.x, raw[i].y - drawStart.y);
+      if (d < sMinD) { sMinD = d; sIdx = i; }
+    }
+
+    // Find closest skeleton point to drawn end
+    let eIdx = 0, eMinD = Infinity;
+    for (let i = 0; i < raw.length; i++) {
+      const d = Math.hypot(raw[i].x - drawEnd.x, raw[i].y - drawEnd.y);
+      if (d < eMinD) { eMinD = d; eIdx = i; }
+    }
+
+    // Also score by average distance of drawn midpoints to skeleton
+    const midSamples = Math.min(10, drawnPoints.length);
+    let midDist = 0;
+    for (let s = 0; s < midSamples; s++) {
+      const dp = drawnPoints[Math.floor(s * drawnPoints.length / midSamples)];
+      let minD = Infinity;
+      for (const sp of raw) {
+        const d = Math.hypot(sp.x - dp.x, sp.y - dp.y);
+        if (d < minD) minD = d;
+      }
+      midDist += minD;
+    }
+    midDist /= midSamples;
+
+    const path = shortestPath(raw, adj, sIdx, eIdx);
+    if (!path || path.length < 2) continue;
+
+    const totalDist = sMinD + eMinD + midDist * 2;
+    if (totalDist < bestDist) {
+      bestDist = totalDist;
+      bestSkel = skel;
+      bestPath = path;
+      bestStartIdx = sIdx;
+      bestEndIdx = eIdx;
+    }
+  }
+
+  if (!bestSkel || !bestPath) return null;
+  void bestStartIdx;
+  void bestEndIdx;
+  return bestPath.length >= 2 ? bestPath : null;
+}
+
+/**
+ * Automatically detect roots inside the ROI (kept for backward compat).
+ * Uses the new phased API internally.
+ */
+export async function autoDetectRoots(
+  imageId: string,
+  roi: ROIRegion,
+  onProgress?: (pct: number, msg: string) => void,
+): Promise<DrawingPoint[][]> {
+  const { candidates } = await computeMaskCandidates(imageId, roi, (p, m) => onProgress?.(p * 0.5, m));
+
+  // Auto-select: prefer masks with root area 3–55%, then largest avgCompArea
+  const viable = candidates.filter(c => c.rootPct >= 0.03 && c.rootPct <= 0.55 && c.numComps >= 1);
+  let best: MaskCandidate;
+  if (viable.length > 0) {
+    best = viable.reduce((a, b) => b.avgCompArea > a.avgCompArea ? b : a);
+  } else {
+    best = candidates.reduce((a, b) => Math.abs(a.rootPct - 0.20) < Math.abs(b.rootPct - 0.20) ? a : b);
+  }
+
+  await processChosenMask(best, Math.round(roi.width), Math.round(roi.height), (p, m) => onProgress?.(50 + p * 0.5, m));
+
+  onProgress?.(100, 'Completado');
+  return [];
 }
