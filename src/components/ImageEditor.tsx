@@ -1,8 +1,9 @@
 import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { useMedidor } from '../context/useMedidor';
 import type { DrawingPoint, DrawingLine, ROIRegion } from '../types';
 import { calculateTotalDistance, drawLine, generateId } from '../utils/drawing';
-import { getOrComputeEmbeddings, getLoadedModelId, computeMaskCandidates, processChosenMask, snapToSkeleton } from '../utils/samSegmentation';
+import { getOrComputeEmbeddings, getLoadedModelId, computeMaskCandidates, processChosenMask, snapToSkeleton, clearEmbeddingsCache } from '../utils/samSegmentation';
 import type { MaskCandidate, MaskCandidatesResult, ProcessedMaskResult } from '../utils/samSegmentation';
 import { setDebugROIImageUrl, setDebugEnabled } from '../utils/samDebugVisualizer';
 import styles from './ImageEditor.module.css';
@@ -28,6 +29,15 @@ function cropImageToROI(dataUrl: string, roi: ROIRegion): Promise<string> {
     img.onerror = reject;
     img.src = dataUrl;
   });
+}
+
+function getPixelAlignedROI(roi: ROIRegion): ROIRegion {
+  return {
+    x: Math.round(roi.x),
+    y: Math.round(roi.y),
+    width: Math.round(roi.width),
+    height: Math.round(roi.height),
+  };
 }
 
 function cloneMask(mask: boolean[][]): boolean[][] {
@@ -226,11 +236,10 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
   const [maskOverlayData, setMaskOverlayData] = useState<{ dataUrl: string; roi: ROIRegion } | null>(null);
   const [tracingProgress, setTracingProgress] = useState(0);
   const [tracingMsg, setTracingMsg] = useState('');
-  const [maskBrushSize, setMaskBrushSize] = useState(10);
-  const [maskEditTool, setMaskEditTool] = useState<'add' | 'erase'>('erase');
   const [activeMaskFlow, setActiveMaskFlow] = useState<'trace' | 'auto' | null>(null);
   const [normalTool, setNormalTool] = useState<'draw' | 'erase'>('draw');
   const [isErasingMeasurements, setIsErasingMeasurements] = useState(false);
+  const [isMaskPainting, setIsMaskPainting] = useState(false);
   const [erasePreviewPoint, setErasePreviewPoint] = useState<DrawingPoint | null>(null);
   const eraseDraftRef = useRef<DrawingLine[] | null>(null);
   const eraseDidChangeRef = useRef(false);
@@ -244,6 +253,12 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
   // Per-image history for undo/redo  (imageId → { entries, index })
   const [historyMap, setHistoryMap] = useState<Map<string, { entries: DrawingLine[][]; index: number }>>(new Map());
   const currentImage = getCurrentImage();
+  const [toolsHostEl, setToolsHostEl] = useState<HTMLElement | null>(null);
+  const lastImageIdRef = useRef<string | undefined>(undefined);
+
+  useEffect(() => {
+    setToolsHostEl(document.getElementById('editor-tools-host'));
+  }, []);
 
   // Current image history helpers
   const imgHistory = currentImage ? historyMap.get(currentImage.id) : undefined;
@@ -252,7 +267,6 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
 
   // Derived: are embeddings ready for this image + loaded model?
   const embeddingsReady = !!(currentImage?.embeddingsModelId && currentImage.embeddingsModelId === samModelId);
-  const canComputeEmbeddings = !!(samModelId && currentImage?.samROI && !embeddingsReady && !isComputingEmbeddings);
 
   // Compute embeddings on the current image's ROI crop
   const handleComputeEmbeddings = useCallback(async () => {
@@ -260,7 +274,8 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
     setIsComputingEmbeddings(true);
     setEmbeddingsProgress(0);
     try {
-      const croppedDataUrl = await cropImageToROI(currentImage.dataUrl, currentImage.samROI);
+      const alignedROI = getPixelAlignedROI(currentImage.samROI);
+      const croppedDataUrl = await cropImageToROI(currentImage.dataUrl, alignedROI);
       // Store the ROI image URL for debug visualizer
       setDebugROIImageUrl(croppedDataUrl);
       await getOrComputeEmbeddings(currentImage.id, croppedDataUrl, (progress: number) => {
@@ -546,7 +561,7 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
 
       // Draw stored ROI rectangle
       if (currentImage.samROI) {
-        const roi = currentImage.samROI;
+        const roi = getPixelAlignedROI(currentImage.samROI);
         ctx.save();
         ctx.setLineDash([8 / viewScale, 4 / viewScale]);
         ctx.strokeStyle = '#2196F3';
@@ -569,14 +584,37 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
         overlayImg.src = maskOverlayData.dataUrl;
       }
 
+      // Draw editable mask overlay directly on canvas while editing
+      if (tracingPhase === 'editingMask' && editableMask && currentImage.samROI) {
+        const roi = getPixelAlignedROI(currentImage.samROI);
+        const maskH = editableMask.length;
+        const maskW = editableMask[0]?.length ?? 0;
+        if (maskW > 0 && maskH > 0) {
+          const scX = roi.width / maskW;
+          const scY = roi.height / maskH;
+          ctx.save();
+          for (let my = 0; my < maskH; my++) {
+            for (let mx = 0; mx < maskW; mx++) {
+              if (!editableMask[my]?.[mx]) continue;
+              const dx = roi.x + mx * scX;
+              const dy = roi.y + my * scY;
+              ctx.fillStyle = 'rgba(13, 148, 136, 0.34)';
+              ctx.fillRect(dx, dy, Math.max(1, scX), Math.max(1, scY));
+            }
+          }
+          ctx.restore();
+        }
+      }
+
       // Draw erase brush preview in normal mode
-      if (!isCalibrationMode && !isROIMode && tracingPhase === 'idle' && normalTool === 'erase' && erasePreviewPoint) {
+      if (!isCalibrationMode && !isROIMode && (tracingPhase === 'idle' || tracingPhase === 'editingMask') && erasePreviewPoint) {
         ctx.save();
         ctx.beginPath();
         ctx.arc(erasePreviewPoint.x, erasePreviewPoint.y, NORMAL_ERASE_BRUSH_RADIUS, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(160, 160, 160, 0.28)';
+        const previewColor = normalTool === 'draw' ? 'rgba(13, 110, 253, 0.2)' : 'rgba(160, 160, 160, 0.28)';
+        ctx.fillStyle = previewColor;
         ctx.fill();
-        ctx.strokeStyle = 'rgba(190, 190, 190, 0.85)';
+        ctx.strokeStyle = normalTool === 'draw' ? 'rgba(13, 110, 253, 0.8)' : 'rgba(190, 190, 190, 0.85)';
         ctx.lineWidth = 1.5 / viewScale;
         ctx.stroke();
         ctx.restore();
@@ -611,10 +649,47 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
       };
       img.src = currentImage.dataUrl;
     }
-  }, [currentImage, currentPoints, isCalibrationMode, tracingPhase, maskOverlayData, viewScale, offsetX, offsetY, canvasWidth, canvasHeight, hoveredEndpoint, drawEndpoint, roiStart, roiCurrent, isROIMode, normalTool, erasePreviewPoint]);
+  }, [currentImage, currentPoints, isCalibrationMode, tracingPhase, maskOverlayData, viewScale, offsetX, offsetY, canvasWidth, canvasHeight, hoveredEndpoint, drawEndpoint, roiStart, roiCurrent, isROIMode, normalTool, erasePreviewPoint, editableMask]);
 
   // Reset view when image changes (defer to next frame)
   const currentImageId = currentImage?.id;
+  useEffect(() => {
+    if (!currentImageId) {
+      lastImageIdRef.current = undefined;
+      return;
+    }
+
+    if (lastImageIdRef.current && lastImageIdRef.current !== currentImageId) {
+      setTracingPhase('idle');
+      setMaskCandidatesResult(null);
+      setSelectedMaskCandidate(null);
+      setEditableMask(null);
+      setProcessedMask(null);
+      setMaskOverlayData(null);
+      setTracingProgress(0);
+      setTracingMsg('');
+      setIsAutoScanning(false);
+      setAutoScanProgress(0);
+      setAutoScanMsg('');
+      setActiveMaskFlow(null);
+      setCurrentPoints([]);
+      setExtendingMeasurement(null);
+      setHoveredEndpoint(null);
+      setIsDrawing(false);
+      setIsPanning(false);
+      setPanStart(null);
+      setRoiStart(null);
+      setRoiCurrent(null);
+      setNormalTool('draw');
+      setErasePreviewPoint(null);
+
+      if (isCalibrationMode) onCalibrationComplete();
+      if (isROIMode) onROIComplete();
+    }
+
+    lastImageIdRef.current = currentImageId;
+  }, [currentImageId, isCalibrationMode, isROIMode, onCalibrationComplete, onROIComplete]);
+
   useEffect(() => {
     const raf = requestAnimationFrame(() => {
       resetViewToImage();
@@ -624,11 +699,11 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
   }, [currentImageId, canvasWidth, canvasHeight]);
 
   // Helpers to get positions
-  const getCanvasCoords = (e: React.MouseEvent<HTMLCanvasElement>) => {
+  const getCanvasCoords = (clientX: number, clientY: number) => {
     const canvas = canvasRef.current!;
     const rect = canvas.getBoundingClientRect();
-    const x = (e.clientX - rect.left) * (canvas.width / rect.width);
-    const y = (e.clientY - rect.top) * (canvas.height / rect.height);
+    const x = (clientX - rect.left) * (canvas.width / rect.width);
+    const y = (clientY - rect.top) * (canvas.height / rect.height);
     return { x, y };
   };
 
@@ -638,6 +713,44 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
       y: (y - offsetY) / viewScale,
     };
   };
+
+  const applyMaskBrushAtImagePoint = useCallback((point: DrawingPoint) => {
+    if (!currentImage?.samROI) return;
+    const roi = getPixelAlignedROI(currentImage.samROI);
+    if (!editableMask || editableMask.length === 0 || (editableMask[0]?.length ?? 0) === 0) return;
+
+    const maskH = editableMask.length;
+    const maskW = editableMask[0].length;
+
+    const relX = point.x - roi.x;
+    const relY = point.y - roi.y;
+    if (relX < 0 || relY < 0 || relX > roi.width || relY > roi.height) return;
+
+    const mx = Math.floor((relX / Math.max(1, roi.width)) * maskW);
+    const my = Math.floor((relY / Math.max(1, roi.height)) * maskH);
+
+    const brushPx = NORMAL_ERASE_BRUSH_RADIUS;
+    const rx = Math.max(1, Math.round((brushPx / Math.max(1, roi.width)) * maskW));
+    const ry = Math.max(1, Math.round((brushPx / Math.max(1, roi.height)) * maskH));
+    const paintValue = normalTool === 'draw';
+
+    setEditableMask(prev => {
+      if (!prev) return prev;
+      const next = prev.map(row => row.slice());
+      const y0 = Math.max(0, my - ry);
+      const y1 = Math.min(maskH - 1, my + ry);
+      const x0 = Math.max(0, mx - rx);
+      const x1 = Math.min(maskW - 1, mx + rx);
+      for (let yy = y0; yy <= y1; yy++) {
+        for (let xx = x0; xx <= x1; xx++) {
+          const nx = (xx - mx) / rx;
+          const ny = (yy - my) / ry;
+          if ((nx * nx + ny * ny) <= 1) next[yy][xx] = paintValue;
+        }
+      }
+      return next;
+    });
+  }, [currentImage, editableMask, normalTool]);
 
   // Trazar handler — phase 1: compute mask candidates
   const handleStartTracing = useCallback(async () => {
@@ -681,6 +794,10 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
     if (!currentImage || !currentImage.samROI || !maskCandidatesResult) return;
     setSelectedMaskCandidate(candidate);
     setEditableMask(cloneMask(candidate.mask));
+    setNormalTool('erase');
+    setIsAutoScanning(false);
+    setAutoScanProgress(0);
+    setAutoScanMsg('');
     setTracingPhase('editingMask');
   }, [currentImage, maskCandidatesResult]);
 
@@ -713,7 +830,7 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
       );
 
       if (activeMaskFlow === 'auto') {
-        const roi = currentImage.samROI!;
+        const roi = getPixelAlignedROI(currentImage.samROI!);
         const scX = result.maskW / roi.width;
         const scY = result.maskH / roi.height;
 
@@ -772,7 +889,7 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
       setProcessedMask(result);
 
       // Build mask overlay image (semi-transparent green on root pixels)
-      const roi = currentImage.samROI!;
+      const roi = getPixelAlignedROI(currentImage.samROI!);
       const oCanvas = document.createElement('canvas');
       oCanvas.width = Math.round(roi.width);
       oCanvas.height = Math.round(roi.height);
@@ -798,6 +915,7 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
       setSelectedMaskCandidate(null);
       setEditableMask(null);
       setActiveMaskFlow(null);
+      setNormalTool('draw');
       setTracingPhase('drawing');
     } catch (err) {
       console.error('ProcessMask error:', err);
@@ -853,6 +971,10 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
         (pct, msg) => { setAutoScanProgress(pct); setAutoScanMsg(msg); },
       );
       setMaskCandidatesResult(result);
+      // Candidate generation is finished; keep UI interactive for mask editing.
+      setIsAutoScanning(false);
+      setAutoScanProgress(0);
+      setAutoScanMsg('');
       setTracingPhase('pickingMask');
     } catch (err) {
       console.error('Auto-scan error:', err);
@@ -869,9 +991,16 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
     if (!canvasRef.current || !currentImage) return;
     if (isAutoScanning || tracingPhase === 'computing' || tracingPhase === 'processing') return;
 
-    const { x, y } = getCanvasCoords(e);
+    const { x, y } = getCanvasCoords(e.clientX, e.clientY);
     const p = toImageCoords(x, y);
     const newPoint = { x: p.x, y: p.y };
+
+    if (tracingPhase === 'editingMask' && e.button === 0) {
+      setIsMaskPainting(true);
+      applyMaskBrushAtImagePoint(newPoint);
+      setErasePreviewPoint(newPoint);
+      return;
+    }
 
     if (!isCalibrationMode && !isROIMode && tracingPhase === 'idle' && normalTool === 'erase' && e.button === 0) {
       setErasePreviewPoint(newPoint);
@@ -948,9 +1077,15 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
       return;
     }
 
-    const { x, y } = getCanvasCoords(e);
+    const { x, y } = getCanvasCoords(e.clientX, e.clientY);
     const p = toImageCoords(x, y);
     const newPoint = { x: p.x, y: p.y };
+
+    if (tracingPhase === 'editingMask') {
+      setErasePreviewPoint(newPoint);
+      if (isMaskPainting) applyMaskBrushAtImagePoint(newPoint);
+      return;
+    }
 
     if (!isCalibrationMode && !isROIMode && tracingPhase === 'idle' && normalTool === 'erase') {
       setErasePreviewPoint(newPoint);
@@ -1026,6 +1161,11 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
   };
 
   const handleMouseUp = async () => {
+    if (isMaskPainting) {
+      setIsMaskPainting(false);
+      return;
+    }
+
     // End panning
     if (isPanning) {
       setIsPanning(false);
@@ -1041,6 +1181,7 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
       const rh = Math.abs(roiCurrent.y - roiStart.y);
       // Only save if the rectangle has a meaningful size
       if (rw > 5 && rh > 5) {
+        clearEmbeddingsCache(currentImage.id);
         updateSamROI(currentImage.id, { x: rx, y: ry, width: rw, height: rh });
       }
       setRoiStart(null);
@@ -1155,7 +1296,7 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
       /* --- Snap to skeleton when in tracing draw mode --- */
       let finalPoints = currentPoints;
       if (tracingPhase === 'drawing' && processedMask && currentImage.samROI) {
-        const roi = currentImage.samROI;
+        const roi = getPixelAlignedROI(currentImage.samROI);
         // Convert drawn image-space coords to mask-space
         const scX = processedMask.maskW / roi.width;
         const scY = processedMask.maskH / roi.height;
@@ -1226,6 +1367,171 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
     setExtendingMeasurement(null);
   };
 
+  const handleTouchStart = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    if (!canvasRef.current || !currentImage) return;
+    if (isAutoScanning || tracingPhase === 'computing' || tracingPhase === 'processing') return;
+    if (e.touches.length === 0) return;
+    e.preventDefault();
+
+    if (e.touches.length >= 2) {
+      const t0 = e.touches[0];
+      const t1 = e.touches[1];
+      setIsPanning(true);
+      setPanStart({ x: (t0.clientX + t1.clientX) / 2, y: (t0.clientY + t1.clientY) / 2 });
+      return;
+    }
+
+    const t = e.touches[0];
+    const { x, y } = getCanvasCoords(t.clientX, t.clientY);
+    const p = toImageCoords(x, y);
+    const newPoint = { x: p.x, y: p.y };
+
+    if (tracingPhase === 'editingMask') {
+      setIsMaskPainting(true);
+      setErasePreviewPoint(newPoint);
+      applyMaskBrushAtImagePoint(newPoint);
+      return;
+    }
+
+    if (!isCalibrationMode && !isROIMode && tracingPhase === 'idle' && normalTool === 'erase') {
+      setErasePreviewPoint(newPoint);
+      const { next, changed } = eraseFromMeasurements(currentImage.measurements, newPoint, NORMAL_ERASE_BRUSH_RADIUS);
+      eraseDraftRef.current = changed ? next : currentImage.measurements;
+      eraseDidChangeRef.current = changed;
+      setIsErasingMeasurements(true);
+      if (changed) {
+        setImages((prev) =>
+          prev.map((img) =>
+            img.id === currentImage.id
+              ? { ...img, measurements: next }
+              : img
+          )
+        );
+      }
+      return;
+    }
+
+    if (isROIMode) {
+      setRoiStart(newPoint);
+      setRoiCurrent(newPoint);
+      return;
+    }
+
+    if (!isCalibrationMode && tracingPhase !== 'drawing' && normalTool === 'draw') {
+      for (const measurement of currentImage.measurements) {
+        if (measurement.type === 'measurement' && measurement.points.length > 0) {
+          const startPoint = measurement.points[0];
+          const endPoint = measurement.points[measurement.points.length - 1];
+
+          if (isNearPoint(p.x, p.y, startPoint)) {
+            setIsDrawing(true);
+            setExtendingMeasurement({ measurementId: measurement.id, isStart: true });
+            setCurrentPoints([...measurement.points]);
+            return;
+          }
+
+          if (isNearPoint(p.x, p.y, endPoint)) {
+            setIsDrawing(true);
+            setExtendingMeasurement({ measurementId: measurement.id, isStart: false });
+            setCurrentPoints([...measurement.points]);
+            return;
+          }
+        }
+      }
+    }
+
+    setIsDrawing(true);
+    setExtendingMeasurement(null);
+    setCurrentPoints([newPoint]);
+  };
+
+  const handleTouchMove = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    if (!canvasRef.current) return;
+    if (e.touches.length === 0) return;
+    e.preventDefault();
+
+    if (e.touches.length >= 2 && isPanning && panStart) {
+      const t0 = e.touches[0];
+      const t1 = e.touches[1];
+      const cx = (t0.clientX + t1.clientX) / 2;
+      const cy = (t0.clientY + t1.clientY) / 2;
+      const dx = cx - panStart.x;
+      const dy = cy - panStart.y;
+      setOffsetX(prev => prev + dx);
+      setOffsetY(prev => prev + dy);
+      setPanStart({ x: cx, y: cy });
+      return;
+    }
+
+    const t = e.touches[0];
+    const { x, y } = getCanvasCoords(t.clientX, t.clientY);
+    const p = toImageCoords(x, y);
+    const newPoint = { x: p.x, y: p.y };
+
+    if (tracingPhase === 'editingMask') {
+      setErasePreviewPoint(newPoint);
+      if (isMaskPainting) applyMaskBrushAtImagePoint(newPoint);
+      return;
+    }
+
+    if (!isCalibrationMode && !isROIMode && tracingPhase === 'idle' && normalTool === 'erase') {
+      setErasePreviewPoint(newPoint);
+    }
+
+    if (isErasingMeasurements && currentImage) {
+      const base = eraseDraftRef.current ?? currentImage.measurements;
+      const { next, changed } = eraseFromMeasurements(base, newPoint, NORMAL_ERASE_BRUSH_RADIUS);
+      if (changed) {
+        eraseDraftRef.current = next;
+        eraseDidChangeRef.current = true;
+        setImages((prev) =>
+          prev.map((img) =>
+            img.id === currentImage.id
+              ? { ...img, measurements: next }
+              : img
+          )
+        );
+      }
+      return;
+    }
+
+    if (isROIMode && roiStart) {
+      setRoiCurrent(newPoint);
+      return;
+    }
+
+    if (isDrawing) {
+      if (isCalibrationMode) {
+        setCurrentPoints([currentPoints[0], newPoint]);
+      } else if (extendingMeasurement) {
+        if (extendingMeasurement.isStart) {
+          setCurrentPoints((prev) => [newPoint, ...prev]);
+        } else {
+          setCurrentPoints((prev) => [...prev, newPoint]);
+        }
+      } else {
+        setCurrentPoints((prev) => [...prev, newPoint]);
+      }
+    }
+  };
+
+  const handleTouchEnd = async (e: React.TouchEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
+    if (e.touches.length >= 2) return;
+    if (e.touches.length === 1 && isPanning) {
+      setIsPanning(false);
+      setPanStart(null);
+      return;
+    }
+    if (e.touches.length === 0) {
+      if (isMaskPainting) {
+        setIsMaskPainting(false);
+        return;
+      }
+      await handleMouseUp();
+    }
+  };
+
   const handleWheel = useCallback((e: WheelEvent) => {
     if (!canvasRef.current) return;
     e.preventDefault();
@@ -1266,8 +1572,8 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
     return <div className={styles.editorPlaceholder}>Carga una imagen para comenzar</div>;
   }
 
-  return (
-    <div className={styles.editor}>
+  const toolsPanel = (
+    <div className={styles.toolsPanel}>
       {isCalibrationMode && (
         <div className={styles.calibrationBanner}>
           📏 Modo calibración: Arrastra en el canvas para dibujar la línea de calibración
@@ -1283,32 +1589,30 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
           🌱 Dibuja sobre las raíces — la medición se ajustará al esqueleto más cercano
         </div>
       )}
-      <div className={styles.toolbar}>
-        <button className={styles.toolbarButton} onClick={handleResetView} title="Restablecer vista (zoom/pan) - Atajo: R">
-          Restablecer zoom
-        </button>
-        <span className={styles.zoomInfo}>{Math.round(viewScale * 100)}%</span>
-        <button 
-          className={styles.toolbarButton} 
-          onClick={handleUndo}
-          disabled={historyIndex <= 0}
-          title="Deshacer - Atajo: Ctrl+Z"
-        >
-          ↶ Deshacer
-        </button>
-        <button 
-          className={styles.toolbarButton} 
-          onClick={handleRedo}
-          disabled={historyIndex >= history.length - 1}
-          title="Rehacer - Atajo: Ctrl+Shift+Z o Ctrl+Y"
-        >
-          ↷ Rehacer
-        </button>
-        {embeddingsReady && (
-          <span className={styles.zoomInfo} style={{ color: '#4caf50' }}>🧠 Embeddings listos</span>
-        )}
-        {!isCalibrationMode && !isROIMode && tracingPhase === 'idle' && (
-          <>
+
+      <div className={styles.toolsSections}>
+        <div className={styles.toolSection}>
+          <div className={styles.sectionTitle}>Dibujo</div>
+          <div className={styles.toolbar}>
+            <button
+              className={styles.toolbarButton}
+              onClick={handleUndo}
+              disabled={historyIndex <= 0}
+              title="Deshacer - Atajo: Ctrl+Z"
+            >
+              ↶ Deshacer
+            </button>
+            <button
+              className={styles.toolbarButton}
+              onClick={handleRedo}
+              disabled={historyIndex >= history.length - 1}
+              title="Rehacer - Atajo: Ctrl+Shift+Z o Ctrl+Y"
+            >
+              ↷ Rehacer
+            </button>
+            <button className={styles.toolbarButton} onClick={handleResetView} title="Restablecer vista (zoom/pan) - Atajo: R">
+              🔍 {Math.round(viewScale * 100)}%
+            </button>
             <div className={styles.normalToolGroup}>
               <button
                 className={`${styles.toolbarButton} ${normalTool === 'draw' ? styles.activeMode : ''}`}
@@ -1325,56 +1629,94 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
                 🧽 Borrar
               </button>
             </div>
-          </>
-        )}
-        {/* Spacer to push embeddings button to the right */}
-        <div style={{ flex: 1 }} />
-        {/* Root-tracing & auto-scan — only when embeddings are ready */}
-        {embeddingsReady && (
-          <>
+          </div>
+        </div>
+
+        <div className={styles.toolSection}>
+          <div className={styles.sectionTitle}>IA</div>
+          <div className={styles.toolbar}>
+            <button
+              className={`${styles.embeddingsBtn} ${embeddingsReady ? styles.activeMode : ''}`}
+              onClick={handleComputeEmbeddings}
+              disabled={!samModelId || !currentImage.samROI || isComputingEmbeddings || (tracingPhase !== 'idle' && tracingPhase !== 'editingMask')}
+              title={
+                isComputingEmbeddings
+                  ? `Calculando... ${Math.round(embeddingsProgress ?? 0)}%`
+                  : embeddingsReady
+                    ? 'Embeddings listos para esta imagen/ROI'
+                    : 'Calcular embeddings IA sobre el ROI'
+              }
+            >
+              {isComputingEmbeddings
+                ? `🧠 ${Math.round(embeddingsProgress ?? 0)}%`
+                : embeddingsReady
+                  ? '🧠 Listos'
+                  : '🧠 Calcular'}
+            </button>
             <button
               className={`${styles.toolbarButton} ${tracingPhase !== 'idle' ? styles.activeMode : ''}`}
               onClick={handleStartTracing}
-              disabled={isAutoScanning || tracingPhase === 'computing' || tracingPhase === 'processing'}
+              disabled={!embeddingsReady || isAutoScanning || tracingPhase === 'computing' || tracingPhase === 'processing' || tracingPhase === 'editingMask'}
               title={tracingPhase === 'idle' ? 'Trazar: segmentar y medir raíces' : 'Cancelar trazado'}
             >
               {tracingPhase === 'computing' || tracingPhase === 'processing'
-                ? `⏳ ${tracingProgress}%`
+                ? `🌱 ${tracingProgress}%`
                 : tracingPhase !== 'idle' ? '✕ Cancelar' : '🌱 Trazar'}
             </button>
             <button
               className={styles.toolbarButton}
               onClick={handleAutoScan}
-              disabled={isAutoScanning || tracingPhase !== 'idle'}
+              disabled={!embeddingsReady || isAutoScanning || tracingPhase !== 'idle'}
               title="Escanear automáticamente el ROI buscando raíces"
             >
-              {isAutoScanning ? `⏳ ${autoScanProgress}%` : '🔍 Auto'}
+              {isAutoScanning ? `🔍 ${autoScanProgress}%` : '🔍 Auto'}
             </button>
+            {tracingPhase === 'editingMask' && (
+              <>
+                <button className={styles.toolbarButton} onClick={handleApplyManualErosion}>
+                  Erosión
+                </button>
+                <button className={styles.toolbarButton} onClick={handleRestoreSelectedMask}>
+                  Restaurar
+                </button>
+                <button className={`${styles.toolbarButton} ${styles.activeMode}`} onClick={handleProcessEditedMask}>
+                  Usar máscara
+                </button>
+                <button className={styles.toolbarButton} onClick={handleCancelTracing}>
+                  Cancelar
+                </button>
+              </>
+            )}
             <button
-              className={`${styles.toolbarButton} ${debugMode ? styles.activeMode : ''}`}
+              className={`${styles.debugTiny} ${debugMode ? styles.debugTinyActive : ''}`}
               onClick={() => { const next = !debugMode; setDebugMode(next); setDebugEnabled(next); }}
-              title="Abrir/cerrar ventana de debug SAM (muestra imágenes, puntos y máscaras)"
+              title="Debug SAM"
             >
-              🐛 Debug
+              debug
             </button>
-          </>
-        )}
-        {/* Embeddings button — right side of toolbar */}
-        {samModelId && currentImage.samROI && !embeddingsReady && (
-          <button
-            className={`${styles.embeddingsBtn}`}
-            onClick={handleComputeEmbeddings}
-            disabled={!canComputeEmbeddings}
-            title={
-              isComputingEmbeddings
-                ? `Calculando... ${Math.round(embeddingsProgress ?? 0)}%`
-                : 'Calcular embeddings IA sobre el ROI'
-            }
-          >
-            {isComputingEmbeddings ? `⏳ ${Math.round(embeddingsProgress ?? 0)}%` : '🧠 Calcular'}
-          </button>
-        )}
+          </div>
+        </div>
       </div>
+
+      {(isComputingEmbeddings || isAutoScanning || tracingPhase === 'computing' || tracingPhase === 'processing') && (
+        <div className={styles.toolsStatus}>
+          {isComputingEmbeddings && (
+            <div className={styles.statusLine}>🧠 Embeddings: {Math.round(embeddingsProgress ?? 0)}%</div>
+          )}
+          {isAutoScanning && (
+            <div className={styles.statusLine}>🔍 {autoScanMsg || 'Escaneando…'} ({autoScanProgress}%)</div>
+          )}
+          {(tracingPhase === 'computing' || tracingPhase === 'processing') && (
+            <div className={styles.statusLine}>🌱 {tracingMsg || 'Procesando…'} ({tracingProgress}%)</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+
+  return (
+    <div className={styles.editor}>
+      {toolsHostEl ? createPortal(toolsPanel, toolsHostEl) : toolsPanel}
 
       {/* Mask picker overlay — phase: pickingMask */}
       {tracingPhase === 'pickingMask' && maskCandidatesResult && (
@@ -1409,72 +1751,6 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
         </div>
       )}
 
-      {/* Mask editor overlay — phase: editingMask */}
-      {tracingPhase === 'editingMask' && selectedMaskCandidate && editableMask && maskCandidatesResult && (
-        <div className={styles.maskPickerOverlay}>
-          <div className={`${styles.maskPickerPanel} ${styles.maskEditorPanel}`}>
-            <h3 style={{ margin: '0 0 8px', color: '#e0e0e0' }}>Editar máscara seleccionada</h3>
-            <p style={{ margin: '0 0 12px', fontSize: '0.85rem', color: '#aaa' }}>
-              Usa el pincel para borrar o añadir máscara, y aplica erosión manual si hace falta.
-            </p>
-
-            <MaskEditor
-              mask={editableMask}
-              roiW={maskCandidatesResult.roiW}
-              roiH={maskCandidatesResult.roiH}
-              brushSize={maskBrushSize}
-              tool={maskEditTool}
-              roiImageUrl={currentImage.dataUrl}
-              roi={currentImage.samROI!}
-              onMaskChange={setEditableMask}
-            />
-
-            <div className={styles.maskEditorToolbar}>
-              <div className={styles.maskEditToolGroup}>
-                <button
-                  className={`${styles.toolbarButton} ${maskEditTool === 'add' ? styles.activeMode : ''}`}
-                  onClick={() => setMaskEditTool('add')}
-                  title="Añadir máscara"
-                >
-                  ➕ Añadir
-                </button>
-                <button
-                  className={`${styles.toolbarButton} ${maskEditTool === 'erase' ? styles.activeMode : ''}`}
-                  onClick={() => setMaskEditTool('erase')}
-                  title="Borrar máscara"
-                >
-                  🧽 Borrar
-                </button>
-              </div>
-              <label className={styles.maskEditorLabel}>
-                Pincel: {maskBrushSize}px
-                <input
-                  type="range"
-                  min={2}
-                  max={30}
-                  step={1}
-                  value={maskBrushSize}
-                  onChange={(e) => setMaskBrushSize(Number(e.target.value))}
-                />
-              </label>
-              <button className={styles.toolbarButton} onClick={handleApplyManualErosion}>
-                Erosión manual (1px)
-              </button>
-              <button className={styles.toolbarButton} onClick={handleRestoreSelectedMask}>
-                Restaurar
-              </button>
-              <div style={{ flex: 1 }} />
-              <button className={styles.toolbarButton} onClick={() => setTracingPhase('pickingMask')}>
-                Volver
-              </button>
-              <button className={`${styles.toolbarButton} ${styles.activeMode}`} onClick={handleProcessEditedMask}>
-                Usar máscara
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       <div className={styles.canvasContainer} ref={containerRef}>
         <canvas
           ref={canvasRef}
@@ -1483,6 +1759,10 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
           onMouseLeave={() => { setErasePreviewPoint(null); void handleMouseUp(); }}
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
+          onTouchCancel={handleTouchEnd}
           onContextMenu={(e) => e.preventDefault()}
           style={{ 
             cursor: (isAutoScanning || tracingPhase === 'computing' || tracingPhase === 'processing')
@@ -1491,20 +1771,13 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
               ? 'crosshair'
               : isCalibrationMode
               ? 'crosshair'
-                      : (!isCalibrationMode && !isROIMode && tracingPhase === 'idle' && normalTool === 'erase')
+                      : (!isCalibrationMode && !isROIMode && normalTool === 'erase' && (tracingPhase === 'idle' || tracingPhase === 'editingMask'))
                       ? 'none'
               : tracingPhase === 'drawing'
               ? 'crosshair'
               : (isPanning ? 'grabbing' : (isDrawing ? 'crosshair' : (hoveredEndpoint ? 'grab' : 'default')))
           }}
         />
-        {(isAutoScanning || tracingPhase === 'computing' || tracingPhase === 'processing') && (
-          <div className={styles.processingOverlay}>
-            {isAutoScanning
-              ? `🔍 ${autoScanMsg || 'Escaneando…'}`
-              : `🌱 ${tracingMsg || 'Procesando…'}`}
-          </div>
-        )}
       </div>
     </div>
   );
@@ -1541,135 +1814,4 @@ const MaskThumbnail: React.FC<{ candidate: MaskCandidate; roiW: number; roiH: nu
   }, [candidate, roiW, roiH]);
 
   return <canvas ref={canvasRef} style={{ borderRadius: 4, display: 'block' }} />;
-};
-
-const MaskEditor: React.FC<{
-  mask: boolean[][];
-  roiW: number;
-  roiH: number;
-  brushSize: number;
-  tool: 'add' | 'erase';
-  roiImageUrl: string;
-  roi: ROIRegion;
-  onMaskChange: React.Dispatch<React.SetStateAction<boolean[][] | null>>;
-}> = ({ mask, roiW, roiH, brushSize, tool, roiImageUrl, roi, onMaskChange }) => {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [isPainting, setIsPainting] = useState(false);
-  const roiImgRef = useRef<HTMLImageElement | null>(null);
-  const [roiBgVersion, setRoiBgVersion] = useState(0);
-
-  useEffect(() => {
-    const img = new Image();
-    img.onload = () => {
-      roiImgRef.current = img;
-      setRoiBgVersion(v => v + 1);
-    };
-    img.src = roiImageUrl;
-    roiImgRef.current = null;
-  }, [roiImageUrl]);
-
-  const renderMask = useCallback(() => {
-    void roiBgVersion;
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const maxW = 760;
-    const maxH = 420;
-    const scale = Math.min(maxW / roiW, maxH / roiH, 1);
-    canvas.width = Math.max(1, Math.round(roiW * scale));
-    canvas.height = Math.max(1, Math.round(roiH * scale));
-
-    ctx.fillStyle = '#131320';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    const roiImg = roiImgRef.current;
-    if (roiImg) {
-      ctx.save();
-      ctx.globalAlpha = 0.45;
-      ctx.drawImage(
-        roiImg,
-        Math.round(roi.x), Math.round(roi.y),
-        Math.round(roi.width), Math.round(roi.height),
-        0, 0,
-        canvas.width, canvas.height,
-      );
-      ctx.restore();
-    }
-
-    const maskH = mask.length;
-    const maskW = mask[0]?.length ?? 0;
-    if (!maskW || !maskH) return;
-
-    const scX = roiW / maskW;
-    const scY = roiH / maskH;
-    ctx.fillStyle = 'rgba(0, 200, 120, 0.85)';
-    for (let my = 0; my < maskH; my++) {
-      for (let mx = 0; mx < maskW; mx++) {
-        if (!mask[my]?.[mx]) continue;
-        const dx = Math.floor(mx * scX * scale);
-        const dy = Math.floor(my * scY * scale);
-        const dw = Math.max(1, Math.ceil(scX * scale));
-        const dh = Math.max(1, Math.ceil(scY * scale));
-        ctx.fillRect(dx, dy, dw, dh);
-      }
-    }
-  }, [mask, roiW, roiH, roi.x, roi.y, roi.width, roi.height, roiBgVersion]);
-
-  useEffect(() => {
-    renderMask();
-  }, [renderMask]);
-
-  const eraseAt = useCallback((clientX: number, clientY: number) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
-    const x = clientX - rect.left;
-    const y = clientY - rect.top;
-    if (x < 0 || y < 0 || x > rect.width || y > rect.height) return;
-
-    const maskH = mask.length;
-    const maskW = mask[0]?.length ?? 0;
-    if (!maskW || !maskH) return;
-
-    const mx = Math.floor((x / rect.width) * maskW);
-    const my = Math.floor((y / rect.height) * maskH);
-    const rx = Math.max(1, Math.round((brushSize / Math.max(1, roiW)) * maskW));
-    const ry = Math.max(1, Math.round((brushSize / Math.max(1, roiH)) * maskH));
-
-    onMaskChange(prev => {
-      if (!prev) return prev;
-      const next = prev.map(row => row.slice());
-      const y0 = Math.max(0, my - ry);
-      const y1 = Math.min(maskH - 1, my + ry);
-      const x0 = Math.max(0, mx - rx);
-      const x1 = Math.min(maskW - 1, mx + rx);
-      for (let yy = y0; yy <= y1; yy++) {
-        for (let xx = x0; xx <= x1; xx++) {
-          const nx = (xx - mx) / rx;
-          const ny = (yy - my) / ry;
-          if ((nx * nx + ny * ny) <= 1) next[yy][xx] = tool === 'add';
-        }
-      }
-      return next;
-    });
-  }, [mask, brushSize, roiW, roiH, onMaskChange, tool]);
-
-  return (
-    <canvas
-      ref={canvasRef}
-      className={styles.maskEditorCanvas}
-      onMouseDown={(e) => {
-        setIsPainting(true);
-        eraseAt(e.clientX, e.clientY);
-      }}
-      onMouseMove={(e) => {
-        if (!isPainting) return;
-        eraseAt(e.clientX, e.clientY);
-      }}
-      onMouseUp={() => setIsPainting(false)}
-      onMouseLeave={() => setIsPainting(false)}
-    />
-  );
 };

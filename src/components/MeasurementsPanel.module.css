@@ -1,16 +1,20 @@
 .panel {
-  padding: var(--space-5);
+  height: 100%;
+  min-height: 0;
+  padding: var(--space-3);
   overflow-y: auto;
 }
 
 .panel h2 {
   margin: 0 0 var(--space-4) 0;
-  font-size: 1.5rem;
+  font-size: 1rem;
+  font-weight: 700;
   color: var(--color-text);
 }
 
 .measurements h3 {
-  font-size: 1.1rem;
+  font-size: 0.86rem;
+  font-weight: 700;
   margin: 0 0 var(--space-2) 0;
   color: var(--color-text);
 }
@@ -31,22 +35,22 @@
   border-radius: var(--radius-sm);
   margin-bottom: var(--space-2);
   color: var(--color-text);
-  box-shadow: var(--shadow);
+  box-shadow: none;
 }
 
 .measurements li span {
   flex: 1;
-  font-size: 0.9rem;
+  font-size: 0.78rem;
 }
 
 .deleteBtn {
   background-color: var(--color-danger);
   color: var(--color-danger-contrast);
-  border: none;
+  border: 1px solid rgba(0,0,0,0.06);
   border-radius: var(--radius-sm);
   padding: var(--space-1) var(--space-2);
   cursor: pointer;
-  font-size: 14px;
+  font-size: 12px;
   margin-left: var(--space-2);
   transition: filter var(--transition);
 }
@@ -62,17 +66,19 @@
 .section { margin-top: var(--space-5); }
 
 .section h3 {
-  font-size: 1.1rem;
+  font-size: 0.86rem;
+  font-weight: 700;
   margin: 0 0 var(--space-2) 0;
   color: var(--color-text);
 }
 
 .btn {
   width: 100%;
-  padding: var(--space-3);
+  padding: 7px 10px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
-  font-size: 1rem;
+  font-size: 0.8rem;
+  font-weight: 600;
   cursor: pointer;
   transition: filter var(--transition);
 }
@@ -93,7 +99,7 @@
 .clearBtn:hover { filter: brightness(0.95); }
 
 .hint {
-  font-size: 0.9rem;
+  font-size: 0.78rem;
   color: var(--color-text-muted);
   margin: var(--space-2) 0 0 0;
 }

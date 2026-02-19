@@ -136,7 +136,10 @@ function AppContent() {
         </main>
 
         <aside className="sidebar right-sidebar">
-          <MeasurementsPanel calibrationUnit={calibrationUnit} />
+          <div className="right-panel top-panel">
+            <MeasurementsPanel calibrationUnit={calibrationUnit} />
+          </div>
+          <div className="right-panel bottom-panel" id="editor-tools-host" />
         </aside>
       </div>
 

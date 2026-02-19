@@ -1,13 +1,13 @@
-/* Global reset — App.css handles all design tokens & theming */
 html, body {
   margin: 0;
   padding: 0;
-  height: 100%;
   width: 100%;
+  height: 100%;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  background: #f8f9fa;
 }
 
 #root {
@@ -15,13 +15,19 @@ html, body {
   height: 100%;
 }
 
-/* Remove default button appearance so component styles take precedence */
-button {
-  font-family: inherit;
-  cursor: pointer;
+* {
+  box-sizing: border-box;
 }
 
-button:focus-visible {
-  outline: 2px solid var(--color-primary, #2175f3);
-  outline-offset: 2px;
+button,
+select,
+input {
+  font-family: inherit;
+}
+
+button:focus-visible,
+select:focus-visible,
+input:focus-visible {
+  outline: 0;
+  box-shadow: 0 0 0 0.2rem rgba(13, 110, 253, 0.25);
 }

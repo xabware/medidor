@@ -2,38 +2,39 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-left: auto;
-  margin-right: 12px;
+  margin-left: 0;
+  margin-right: 0;
+  flex-wrap: wrap;
 }
 
 .selector {
-  background: rgba(0, 0, 0, 0.3);
-  color: white;
-  border: 1px solid rgba(255, 255, 255, 0.3);
+  background: #fff;
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
   border-radius: 4px;
-  padding: 4px 8px;
-  font-size: 0.8rem;
+  padding: 4px 6px;
+  font-size: 0.75rem;
   cursor: pointer;
   max-width: 160px;
   outline: none;
   transition: border-color var(--transition);
 }
-.selector:focus { border-color: rgba(255, 255, 255, 0.6); }
-.selector option { background: #333; color: white; }
+.selector:focus { border-color: #86b7fe; }
+.selector option { background: #fff; color: var(--color-text); }
 
 .loadBtn {
-  background: rgba(255, 255, 255, 0.2);
-  color: white;
-  border: 1px solid rgba(255, 255, 255, 0.3);
+  background: #f8f9fa;
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
-  padding: 6px 14px;
-  font-size: 0.85rem;
-  font-weight: 500;
+  padding: 5px 9px;
+  font-size: 0.75rem;
+  font-weight: 600;
   cursor: pointer;
   transition: all var(--transition);
   white-space: nowrap;
 }
-.loadBtn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.3); border-color: rgba(255, 255, 255, 0.5); }
+.loadBtn:hover:not(:disabled) { background: var(--color-toolbar-hover); border-color: var(--color-border); }
 .loadBtn:disabled { opacity: 0.55; cursor: default; }
 
 .loadBtnActive {
@@ -46,8 +47,8 @@
 }
 
 .statusText {
-  font-size: 0.8rem;
-  color: rgba(255, 255, 255, 0.85);
+  font-size: 0.74rem;
+  color: var(--color-text-muted);
   white-space: nowrap;
   max-width: 220px;
   overflow: hidden;
@@ -55,9 +56,9 @@
 }
 
 .infoBtn {
-  background: rgba(255, 255, 255, 0.2);
-  border: 1px solid rgba(255, 255, 255, 0.3);
-  color: white;
+  background: #f8f9fa;
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
   border-radius: 50%;
   width: 24px;
   height: 24px;
@@ -71,7 +72,7 @@
   padding: 0;
   flex-shrink: 0;
 }
-.infoBtn:hover { background: rgba(255, 255, 255, 0.3); border-color: rgba(255, 255, 255, 0.5); }
+.infoBtn:hover { background: var(--color-toolbar-hover); border-color: var(--color-border); }
 
 /* Info panel (popup) */
 .infoOverlay {
