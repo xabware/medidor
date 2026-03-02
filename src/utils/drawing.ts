@@ -14,6 +14,27 @@ export function calculateTotalDistance(points: DrawingPoint[]): number {
   return total;
 }
 
+/**
+ * Calculate the real-world length of a polyline using 2D calibration.
+ * Each segment is converted to real units before computing its length,
+ * handling potential non-uniform scaling between X and Y axes.
+ */
+export function calculateTotalRealDistance(
+  points: DrawingPoint[],
+  pixelsPerUnitX: number,
+  pixelsPerUnitY: number,
+): number {
+  if (points.length < 2) return 0;
+
+  let total = 0;
+  for (let i = 0; i < points.length - 1; i++) {
+    const dxReal = (points[i + 1].x - points[i].x) / pixelsPerUnitX;
+    const dyReal = (points[i + 1].y - points[i].y) / pixelsPerUnitY;
+    total += Math.sqrt(dxReal * dxReal + dyReal * dyReal);
+  }
+  return total;
+}
+
 export function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 }

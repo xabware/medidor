@@ -4,25 +4,23 @@ import type { LoadedImage } from '../types';
 import styles from './ImageLoader.module.css';
 
 interface ImageLoaderProps {
-  onStartCalibration: () => void;
-  onCancelCalibration: () => void;
-  isCalibrationMode: boolean;
   calibrationUnit: string;
   samModelId: string | null;
   maxResolution: number | null;
   isROIMode: boolean;
   onStartROI: () => void;
+  isCalibrationMode: boolean;
+  onStartCalibration: () => void;
 }
 
 export const ImageLoader: React.FC<ImageLoaderProps> = ({ 
-  onStartCalibration, 
-  onCancelCalibration,
-  isCalibrationMode,
   calibrationUnit,
   samModelId,
   maxResolution,
   isROIMode,
   onStartROI,
+  isCalibrationMode,
+  onStartCalibration,
 }) => {
   const { images, addImages, removeImage, setCurrentImage, currentImageId, renameImage } = useMedidor();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -40,13 +38,10 @@ export const ImageLoader: React.FC<ImageLoaderProps> = ({
     }
   };
 
-  const handleCalibrateClick = (imageId: string) => {
-    if (isCalibrationMode) {
-      onCancelCalibration();
-    } else {
-      setCurrentImage(imageId);
-      onStartCalibration();
-    }
+  const handleCalibrateClick = (image: LoadedImage) => {
+    if (isCalibrationMode) return;
+    setCurrentImage(image.id);
+    onStartCalibration();
   };
 
   const handleDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
@@ -186,9 +181,9 @@ export const ImageLoader: React.FC<ImageLoaderProps> = ({
                     {isCompressed ? `${image.originalWidth}×${image.originalHeight} → ` : ''}
                     {image.width} × {image.height}
                   </p>
-                  {image.calibration?.pixelsPerUnit && (
+                  {image.calibration && (
                     <p className={styles.calibrationInfo}>
-                      📏 {image.calibration.pixelsPerUnit.toFixed(2)} px/{calibrationUnit}
+                      📏 {image.calibration.realWidth}×{image.calibration.realHeight} {calibrationUnit}
                     </p>
                   )}
                 </div>
@@ -213,11 +208,12 @@ export const ImageLoader: React.FC<ImageLoaderProps> = ({
                   className={`${styles.calibrateBtn} ${isCalibrationMode && currentImageId === image.id ? styles.active : ''}`}
                   onClick={(e) => {
                     e.stopPropagation();
-                    handleCalibrateClick(image.id);
+                    handleCalibrateClick(image);
                   }}
-                  title={isCalibrationMode && currentImageId === image.id ? 'Cancelar calibración' : (image.calibration?.pixelsPerUnit ? 'Recalibrar' : 'Calibrar')}
+                  disabled={isCalibrationMode || isROIMode}
+                  title={image.calibration ? 'Recalibrar' : 'Calibrar'}
                 >
-                  {image.calibration?.pixelsPerUnit ? '🔄' : '📏'}
+                  {image.calibration ? '🔄' : '📏'}
                 </button>
                 <button
                   className={styles.removeBtn}

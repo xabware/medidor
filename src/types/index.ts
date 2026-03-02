@@ -13,10 +13,30 @@ export interface DrawingLine {
   timestamp: number;
 }
 
+/** A straight reference line drawn during calibration (2 endpoints). */
+export interface CalibrationRefLine {
+  start: DrawingPoint;
+  end: DrawingPoint;
+  /** Real-world length in calibrationUnit */
+  realLength: number;
+  /** Pixel length of the original line before any normalisation */
+  pixelLength: number;
+}
+
 export interface ImageCalibration {
   imageId: string;
-  calibrationLine?: DrawingLine;
-  pixelsPerUnit?: number;
+  /** Calibration mode: 'line' (2-point, no normalization) or 'rect' (4-corner perspective) */
+  mode: 'line' | 'rect';
+  /** The 4 corners of the reference rectangle in source image space [TL, TR, BR, BL] (rect mode) */
+  corners?: [DrawingPoint, DrawingPoint, DrawingPoint, DrawingPoint];
+  /** The 2 endpoints of the reference line (line mode) */
+  linePoints?: [DrawingPoint, DrawingPoint];
+  realWidth: number;
+  realHeight: number;
+  pixelsPerUnitX: number;
+  pixelsPerUnitY: number;
+  /** Whether the image was perspective-corrected */
+  wasNormalized: boolean;
   timestamp: number;
 }
 

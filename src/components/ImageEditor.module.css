@@ -59,6 +59,182 @@
 
 .calibrationBanner { background: var(--color-surface-hover); color: var(--color-text); padding: 8px 10px; border-radius: var(--radius-sm); text-align: center; font-size: 0.78rem; font-weight: 600; border: 1px solid var(--color-border); box-shadow: none; }
 
+/* Calibration section */
+.calibrationSection {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  padding: 10px;
+}
+
+.calModeBtn {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s, background 0.15s;
+}
+.calModeBtn:hover {
+  border-color: var(--color-primary);
+  background: rgba(var(--color-primary-rgb, 59, 130, 246), 0.08);
+}
+.calModeBtn strong { font-size: 0.82rem; }
+.calModeDesc {
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+  line-height: 1.3;
+}
+
+.calSteps {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  justify-content: center;
+}
+
+.calStep {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 7px;
+  border-radius: var(--radius-sm);
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  background: var(--color-surface-hover);
+  border: 1px solid var(--color-border);
+  transition: all 0.15s;
+}
+
+.calStepActive {
+  color: white;
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
+.calStepDone {
+  color: white;
+  background: var(--color-success);
+  border-color: var(--color-success);
+}
+
+.calStepArrow {
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+}
+
+.calStepNum {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.2);
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.calInputRow {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.calInputLabel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.calInput {
+  width: 100%;
+  padding: 6px 10px;
+  font-size: 0.85rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  outline: none;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+
+.calInput:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px rgba(13, 110, 253, 0.15);
+}
+
+.calInput::-webkit-outer-spin-button,
+.calInput::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.calInput[type="number"] {
+  -moz-appearance: textfield;
+}
+
+.calInputActions {
+  display: flex;
+  gap: 6px;
+}
+
+.calNextBtn {
+  flex: 1;
+  padding: 6px 12px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: var(--radius-sm);
+  background: var(--color-success);
+  color: var(--color-primary-contrast);
+  cursor: pointer;
+  transition: filter var(--transition);
+}
+.calNextBtn:hover:not(:disabled) { filter: brightness(0.95); }
+.calNextBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.calRedrawBtn {
+  padding: 6px 10px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: filter var(--transition);
+}
+.calRedrawBtn:hover { filter: brightness(0.9); }
+
+.calCancelBtn {
+  width: 100%;
+  padding: 6px 12px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: filter var(--transition);
+}
+.calCancelBtn:hover:not(:disabled) { filter: brightness(0.9); }
+.calCancelBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+
 .toolbar {
   display: flex;
   align-items: center;

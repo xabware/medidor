@@ -1,6 +1,6 @@
 import React from 'react';
 import { useMedidor } from '../context/useMedidor';
-import { downloadCSV } from '../utils/drawing';
+import { downloadCSV, calculateTotalRealDistance } from '../utils/drawing';
 import type { LoadedImage, DrawingLine } from '../types';
 import styles from './MeasurementsPanel.module.css';
 
@@ -24,7 +24,7 @@ export const MeasurementsPanel: React.FC<MeasurementsPanelProps> = ({ calibratio
     });
 
     images.forEach((image: LoadedImage) => {
-      const pixelsPerUnit = image.calibration?.pixelsPerUnit || 1;
+      const cal = image.calibration;
       
       const row: Record<string, string | number> = {
         imageFileName: image.displayName ?? image.file.name,
@@ -33,9 +33,11 @@ export const MeasurementsPanel: React.FC<MeasurementsPanelProps> = ({ calibratio
       // Agregar todas las columnas de mediciones (incluso si están vacías)
       for (let i = 0; i < maxMeasurements; i++) {
         const measurement = image.measurements[i];
-        if (measurement) {
-          const realLength = measurement.pixelLength ? measurement.pixelLength / pixelsPerUnit : 0;
+        if (measurement && cal) {
+          const realLength = calculateTotalRealDistance(measurement.points, cal.pixelsPerUnitX, cal.pixelsPerUnitY);
           row[`medicion_${i + 1}`] = parseFloat(realLength.toFixed(2));
+        } else if (measurement && measurement.pixelLength) {
+          row[`medicion_${i + 1}`] = parseFloat(measurement.pixelLength.toFixed(2));
         } else {
           row[`medicion_${i + 1}`] = '';
         }
@@ -67,14 +69,16 @@ export const MeasurementsPanel: React.FC<MeasurementsPanelProps> = ({ calibratio
           <h3>Imagen actual ({currentImage.measurements.length})</h3>
           <ul>
             {currentImage.measurements.map((measurement: DrawingLine, idx: number) => {
-              const pixelsPerUnit = currentImage.calibration?.pixelsPerUnit || 1;
-              const realLength = measurement.pixelLength ? measurement.pixelLength / pixelsPerUnit : 0;
+              const cal = currentImage.calibration;
+              const realLength = cal
+                ? calculateTotalRealDistance(measurement.points, cal.pixelsPerUnitX, cal.pixelsPerUnitY)
+                : null;
               
               return (
                 <li key={measurement.id}>
                   <span>
                     Línea {idx + 1}: {measurement.pixelLength?.toFixed(2)} px
-                    {currentImage.calibration?.pixelsPerUnit && ` → ${realLength.toFixed(2)} ${calibrationUnit}`}
+                    {realLength !== null && ` → ${realLength.toFixed(2)} ${calibrationUnit}`}
                   </span>
                   <button
                     className={styles.deleteBtn}

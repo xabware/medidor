@@ -139,3 +139,96 @@
 .badge { display: inline-block; font-size: 0.68rem; font-weight: 700; padding: 1px 5px; border-radius: 4px; margin-left: 4px; vertical-align: middle; }
 .badgeAI { background: var(--color-teal-light); color: var(--color-teal-dark); }
 .badgeStale { background: #fce4ec; color: #c62828; }
+
+/* Inline calibration form */
+.calibrationForm {
+  margin-top: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-active);
+}
+
+.calibrationFormTitle {
+  margin: 0 0 var(--space-2) 0;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.calibrationInputs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2);
+}
+
+.calibrationLabel {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.calibrationInput {
+  width: 100%;
+  padding: 5px 8px;
+  font-size: 0.82rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  outline: none;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+
+.calibrationInput:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px rgba(13, 110, 253, 0.15);
+}
+
+/* Remove spinner arrows on number inputs */
+.calibrationInput::-webkit-outer-spin-button,
+.calibrationInput::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.calibrationInput[type="number"] {
+  -moz-appearance: textfield;
+}
+
+.calibrationActions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.calibrationApplyBtn {
+  flex: 1;
+  padding: 5px 10px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: var(--radius-sm);
+  background: var(--color-success);
+  color: var(--color-primary-contrast);
+  cursor: pointer;
+  transition: filter var(--transition);
+}
+.calibrationApplyBtn:hover:not(:disabled) { filter: brightness(0.95); }
+.calibrationApplyBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.calibrationCancelBtn {
+  padding: 5px 10px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: filter var(--transition);
+}
+.calibrationCancelBtn:hover { filter: brightness(0.95); }

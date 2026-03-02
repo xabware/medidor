@@ -6,7 +6,37 @@ import { calculateTotalDistance, drawLine, generateId } from '../utils/drawing';
 import { getOrComputeEmbeddings, getLoadedModelId, computeMaskCandidates, processChosenMask, snapToSkeleton, clearEmbeddingsCache } from '../utils/samSegmentation';
 import type { MaskCandidate, MaskCandidatesResult, ProcessedMaskResult } from '../utils/samSegmentation';
 import { setDebugROIImageUrl, setDebugEnabled } from '../utils/samDebugVisualizer';
+import { normalizeImage } from '../utils/imageNormalization';
 import styles from './ImageEditor.module.css';
+
+/**
+ * Takes 4 points clicked in any order and returns them sorted as
+ * [TopLeft, TopRight, BottomRight, BottomLeft].
+ */
+function sortCornersToQuad(pts: DrawingPoint[]): [DrawingPoint, DrawingPoint, DrawingPoint, DrawingPoint] {
+  // Centroid Y for top/bottom split
+  const cy = (pts[0].y + pts[1].y + pts[2].y + pts[3].y) / 4;
+  // Classify above / below centroid
+  const top: DrawingPoint[] = [];
+  const bot: DrawingPoint[] = [];
+  for (const p of pts) {
+    if (p.y < cy) top.push(p);
+    else bot.push(p);
+  }
+  // Edge case: if not 2-2 split, sort by y and take first 2 as top
+  if (top.length !== 2 || bot.length !== 2) {
+    const sorted = [...pts].sort((a, b) => a.y - b.y);
+    top.length = 0;
+    bot.length = 0;
+    top.push(sorted[0], sorted[1]);
+    bot.push(sorted[2], sorted[3]);
+  }
+  // Within each pair, leftmost first
+  top.sort((a, b) => a.x - b.x);
+  bot.sort((a, b) => a.x - b.x);
+  // TL, TR, BR, BL
+  return [top[0], top[1], bot[1], bot[0]];
+}
 
 /** Crop a data-URL image to the given ROI and return a new data-URL. */
 function cropImageToROI(dataUrl: string, roi: ROIRegion): Promise<string> {
@@ -188,23 +218,23 @@ function mergePolylineAtEndpoint(
 }
 
 interface ImageEditorProps {
-  isCalibrationMode: boolean;
-  onCalibrationComplete: () => void;
-  calibrationUnit: string;
   samModelId: string | null;
   isROIMode: boolean;
   onROIComplete: () => void;
+  isCalibrationMode: boolean;
+  onCalibrationComplete: () => void;
+  calibrationUnit: string;
 }
 
 export const ImageEditor: React.FC<ImageEditorProps> = ({ 
-  isCalibrationMode, 
-  onCalibrationComplete,
-  calibrationUnit,
   samModelId,
   isROIMode,
   onROIComplete,
+  isCalibrationMode,
+  onCalibrationComplete,
+  calibrationUnit,
 }) => {
-  const { getCurrentImage, updateCalibration, setImages, updateSamROI } = useMedidor();
+  const { getCurrentImage, setImages, updateSamROI, updateCalibration } = useMedidor();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   // Cached decoded Image to avoid re-decoding base64 on every render frame
@@ -255,6 +285,15 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
   const currentImage = getCurrentImage();
   const [toolsHostEl, setToolsHostEl] = useState<HTMLElement | null>(null);
   const lastImageIdRef = useRef<string | undefined>(undefined);
+  // Calibration state
+  type CalibrationMode = 'choose' | 'line' | 'rect';
+  type CalibrationPhase = 'choosingMode' | 'clickingPoints' | 'inputDimensions' | 'normalizing';
+  const [calMode, setCalMode] = useState<CalibrationMode>('choose');
+  const [calPhase, setCalPhase] = useState<CalibrationPhase>('choosingMode');
+  const [calCorners, setCalCorners] = useState<DrawingPoint[]>([]);
+  const [calRealWidth, setCalRealWidth] = useState('');
+  const [calRealHeight, setCalRealHeight] = useState('');
+  const [calNormalizing, setCalNormalizing] = useState(false);
 
   useEffect(() => {
     setToolsHostEl(document.getElementById('editor-tools-host'));
@@ -293,6 +332,109 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
       setEmbeddingsProgress(null);
     }
   }, [currentImage, samModelId, isComputingEmbeddings, setImages]);
+
+  // Reset calibration state when mode starts
+  useEffect(() => {
+    if (isCalibrationMode) {
+      setCalMode('choose');
+      setCalPhase('choosingMode');
+      setCalCorners([]);
+      setCalRealWidth('');
+      setCalRealHeight('');
+      setCalNormalizing(false);
+    }
+  }, [isCalibrationMode]);
+
+  // Calibration completion handler
+  // Line calibration handler (2 points, no normalization)
+  const handleLineCalibrationComplete = useCallback(() => {
+    if (!currentImage || calCorners.length !== 2) return;
+    const rLen = parseFloat(calRealWidth);
+    if (isNaN(rLen) || rLen <= 0) return;
+
+    const [p0, p1] = calCorners;
+    const dx = p1.x - p0.x;
+    const dy = p1.y - p0.y;
+    const pixelLen = Math.sqrt(dx * dx + dy * dy);
+    if (pixelLen < 1) return;
+    const ppu = pixelLen / rLen;
+
+    updateCalibration(currentImage.id, {
+      imageId: currentImage.id,
+      mode: 'line',
+      linePoints: [p0, p1],
+      realWidth: rLen,
+      realHeight: rLen,
+      pixelsPerUnitX: ppu,
+      pixelsPerUnitY: ppu,
+      wasNormalized: false,
+      timestamp: Date.now(),
+    });
+    onCalibrationComplete();
+  }, [currentImage, calCorners, calRealWidth, updateCalibration, onCalibrationComplete]);
+
+  // Rect calibration handler (4 corners, perspective correction)
+  const handleCalibrationComplete = useCallback(async () => {
+    if (!currentImage || calCorners.length !== 4) return;
+    const rW = parseFloat(calRealWidth);
+    const rH = parseFloat(calRealHeight);
+    if (isNaN(rW) || rW <= 0 || isNaN(rH) || rH <= 0) return;
+
+    // Sort the 4 user-clicked points into [TL, TR, BR, BL] order
+    const sorted = sortCornersToQuad(calCorners);
+    const corners: [DrawingPoint, DrawingPoint, DrawingPoint, DrawingPoint] =
+      [sorted[0], sorted[1], sorted[2], sorted[3]];
+
+    setCalNormalizing(true);
+    setCalPhase('normalizing');
+    try {
+      const result = await normalizeImage(currentImage.dataUrl, corners, rW, rH);
+
+      // Transform existing measurement points
+      const transformedMeasurements = currentImage.measurements.map(m => {
+        const newPoints = m.points.map(p => result.transformPoint(p));
+        return { ...m, points: newPoints, pixelLength: calculateTotalDistance(newPoints) };
+      });
+
+      setImages(prev => prev.map(img =>
+        img.id === currentImage.id ? {
+          ...img,
+          dataUrl: result.dataUrl,
+          width: result.width,
+          height: result.height,
+          measurements: transformedMeasurements,
+          embeddingsModelId: undefined,
+          samROI: undefined,
+        } : img
+      ));
+
+      updateCalibration(currentImage.id, {
+        imageId: currentImage.id,
+        mode: 'rect',
+        corners,
+        realWidth: rW,
+        realHeight: rH,
+        pixelsPerUnitX: result.pixelsPerUnitX,
+        pixelsPerUnitY: result.pixelsPerUnitY,
+        wasNormalized: true,
+        timestamp: Date.now(),
+      });
+
+      // Reset history for this image after normalization
+      setHistoryMap(prev => {
+        const next = new Map(prev);
+        next.delete(currentImage.id);
+        return next;
+      });
+    } catch (err) {
+      console.error('Normalization error:', err);
+      alert('Error al normalizar la imagen: ' + (err as Error).message);
+      setCalNormalizing(false);
+      return;
+    }
+    setCalNormalizing(false);
+    onCalibrationComplete();
+  }, [currentImage, calCorners, calRealWidth, calRealHeight, setImages, updateCalibration, onCalibrationComplete, setHistoryMap]);
 
   // History — render-time adjustment pattern
   const saveToHistory = useCallback((imageId: string, measurements: DrawingLine[], h: DrawingLine[][], hIdx: number) => {
@@ -548,14 +690,9 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
         }
       });
 
-      // Draw calibration line if exists (line only)
-      if (currentImage.calibration?.calibrationLine) {
-        drawLine(ctx, currentImage.calibration.calibrationLine.points, '#00FF00', 3);
-      }
-
       // Draw current drawing
       if (currentPoints.length > 0) {
-        const color = isCalibrationMode ? '#0000FF' : (tracingPhase === 'drawing' ? '#00897b' : '#FF0000');
+        const color = tracingPhase === 'drawing' ? '#00897b' : '#FF0000';
         drawLine(ctx, currentPoints, color, tracingPhase === 'drawing' ? 3 : 2);
       }
 
@@ -568,6 +705,55 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
         ctx.lineWidth = 2 / viewScale;
         ctx.strokeRect(roi.x, roi.y, roi.width, roi.height);
         ctx.setLineDash([]);
+        ctx.restore();
+      }
+
+      // Draw calibration corners & quad
+      if (isCalibrationMode && calCorners.length > 0) {
+        ctx.save();
+        // When 4 corners placed, sort them into proper quad order for drawing
+        const drawOrder = calCorners.length === 4
+          ? sortCornersToQuad(calCorners)
+          : calCorners;
+        // Draw lines between corners
+        if (drawOrder.length >= 2) {
+          ctx.beginPath();
+          ctx.moveTo(drawOrder[0].x, drawOrder[0].y);
+          for (let i = 1; i < drawOrder.length; i++) {
+            ctx.lineTo(drawOrder[i].x, drawOrder[i].y);
+          }
+          if (drawOrder.length === 4) ctx.closePath();
+          ctx.strokeStyle = '#FF8C00';
+          ctx.lineWidth = 2.5 / viewScale;
+          ctx.setLineDash([8 / viewScale, 4 / viewScale]);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          // Light fill when quad is complete
+          if (drawOrder.length === 4) {
+            ctx.fillStyle = 'rgba(255, 140, 0, 0.08)';
+            ctx.fill();
+          }
+        }
+        // Draw numbered corner circles (in click order)
+        calCorners.forEach((corner, idx) => {
+          ctx.beginPath();
+          ctx.arc(corner.x, corner.y, 8 / viewScale, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(255, 140, 0, 0.5)';
+          ctx.fill();
+          ctx.strokeStyle = '#FF8C00';
+          ctx.lineWidth = 2 / viewScale;
+          ctx.stroke();
+          // Number label
+          const fontSize = Math.max(11, 14 / viewScale);
+          ctx.font = `bold ${fontSize}px system-ui, sans-serif`;
+          ctx.textBaseline = 'middle';
+          ctx.textAlign = 'center';
+          ctx.fillStyle = 'white';
+          ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+          ctx.lineWidth = 3 / viewScale;
+          ctx.strokeText(String(idx + 1), corner.x, corner.y);
+          ctx.fillText(String(idx + 1), corner.x, corner.y);
+        });
         ctx.restore();
       }
 
@@ -607,7 +793,7 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
       }
 
       // Draw erase brush preview in normal mode
-      if (!isCalibrationMode && !isROIMode && (tracingPhase === 'idle' || tracingPhase === 'editingMask') && erasePreviewPoint) {
+      if (!isROIMode && (tracingPhase === 'idle' || tracingPhase === 'editingMask') && erasePreviewPoint) {
         ctx.save();
         ctx.beginPath();
         ctx.arc(erasePreviewPoint.x, erasePreviewPoint.y, NORMAL_ERASE_BRUSH_RADIUS, 0, Math.PI * 2);
@@ -649,7 +835,7 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
       };
       img.src = currentImage.dataUrl;
     }
-  }, [currentImage, currentPoints, isCalibrationMode, tracingPhase, maskOverlayData, viewScale, offsetX, offsetY, canvasWidth, canvasHeight, hoveredEndpoint, drawEndpoint, roiStart, roiCurrent, isROIMode, normalTool, erasePreviewPoint, editableMask]);
+  }, [currentImage, currentPoints, tracingPhase, maskOverlayData, viewScale, offsetX, offsetY, canvasWidth, canvasHeight, hoveredEndpoint, drawEndpoint, roiStart, roiCurrent, isROIMode, normalTool, erasePreviewPoint, editableMask, isCalibrationMode, calCorners, calPhase]);
 
   // Reset view when image changes (defer to next frame)
   const currentImageId = currentImage?.id;
@@ -683,12 +869,11 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
       setNormalTool('draw');
       setErasePreviewPoint(null);
 
-      if (isCalibrationMode) onCalibrationComplete();
       if (isROIMode) onROIComplete();
     }
 
     lastImageIdRef.current = currentImageId;
-  }, [currentImageId, isCalibrationMode, isROIMode, onCalibrationComplete, onROIComplete]);
+  }, [currentImageId, isROIMode, onROIComplete]);
 
   useEffect(() => {
     const raf = requestAnimationFrame(() => {
@@ -995,6 +1180,22 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
     const p = toImageCoords(x, y);
     const newPoint = { x: p.x, y: p.y };
 
+    // Calibration mode: click points
+    if (isCalibrationMode) {
+      if (e.button === 2) {
+        setIsPanning(true);
+        setPanStart({ x: e.clientX, y: e.clientY });
+        return;
+      }
+      const maxPoints = calMode === 'line' ? 2 : 4;
+      if (e.button === 0 && calPhase === 'clickingPoints' && calCorners.length < maxPoints) {
+        const next = [...calCorners, newPoint];
+        setCalCorners(next);
+        if (next.length === maxPoints) setCalPhase('inputDimensions');
+      }
+      return;
+    }
+
     if (tracingPhase === 'editingMask' && e.button === 0) {
       setIsMaskPainting(true);
       applyMaskBrushAtImagePoint(newPoint);
@@ -1002,7 +1203,7 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
       return;
     }
 
-    if (!isCalibrationMode && !isROIMode && tracingPhase === 'idle' && normalTool === 'erase' && e.button === 0) {
+    if (!isROIMode && tracingPhase === 'idle' && normalTool === 'erase' && e.button === 0) {
       setErasePreviewPoint(newPoint);
       const { next, changed } = eraseFromMeasurements(currentImage.measurements, newPoint, NORMAL_ERASE_BRUSH_RADIUS);
       eraseDraftRef.current = changed ? next : currentImage.measurements;
@@ -1035,7 +1236,7 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
     }
 
     // Check if clicking on an endpoint (only in measurement mode, not tracing, and draw tool)
-    if (!isCalibrationMode && tracingPhase !== 'drawing' && normalTool === 'draw') {
+    if (tracingPhase !== 'drawing' && normalTool === 'draw') {
       for (const measurement of currentImage.measurements) {
         if (measurement.type === 'measurement' && measurement.points.length > 0) {
           const startPoint = measurement.points[0];
@@ -1081,13 +1282,16 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
     const p = toImageCoords(x, y);
     const newPoint = { x: p.x, y: p.y };
 
+    // In calibration mode, nothing to do on move (clicks only)
+    if (isCalibrationMode) return;
+
     if (tracingPhase === 'editingMask') {
       setErasePreviewPoint(newPoint);
       if (isMaskPainting) applyMaskBrushAtImagePoint(newPoint);
       return;
     }
 
-    if (!isCalibrationMode && !isROIMode && tracingPhase === 'idle' && normalTool === 'erase') {
+    if (!isROIMode && tracingPhase === 'idle' && normalTool === 'erase') {
       setErasePreviewPoint(newPoint);
     }
 
@@ -1119,7 +1323,7 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
     }
 
     // Update hover state (only in measurement mode when not drawing, not tracing)
-    if (!isDrawing && !isCalibrationMode && tracingPhase !== 'drawing' && currentImage) {
+    if (!isDrawing && tracingPhase !== 'drawing' && currentImage) {
       let foundHover = false;
       for (const measurement of currentImage.measurements) {
         if (measurement.type === 'measurement' && measurement.points.length > 0) {
@@ -1146,9 +1350,7 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
 
     // Handle drawing
     if (isDrawing) {
-      if (isCalibrationMode) {
-        setCurrentPoints([currentPoints[0], newPoint]);
-      } else if (extendingMeasurement) {
+      if (extendingMeasurement) {
         if (extendingMeasurement.isStart) {
           setCurrentPoints((prev) => [newPoint, ...prev]);
         } else {
@@ -1172,6 +1374,9 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
       setPanStart(null);
       return;
     }
+
+    // Calibration: no mouseUp handling needed (corners added on click)
+    if (isCalibrationMode) return;
 
     // ROI mode: finish rectangle selection
     if (isROIMode && roiStart && roiCurrent && currentImage) {
@@ -1211,41 +1416,7 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
       return;
     }
 
-    if (isCalibrationMode) {
-      const pixelLength = calculateTotalDistance(currentPoints);
-      const calibrationLine: DrawingLine = {
-        id: generateId(),
-        points: currentPoints,
-        imageId: currentImage.id,
-        type: 'calibration',
-        pixelLength,
-        timestamp: Date.now(),
-      };
-
-      const realLengthInput = prompt(
-        `Línea de calibración: ${pixelLength.toFixed(2)} píxeles\n\n` +
-        `Ingresa la longitud real de esta línea (en ${calibrationUnit}):`
-      );
-
-      if (realLengthInput) {
-        const realLength = parseFloat(realLengthInput);
-        if (!isNaN(realLength) && realLength > 0) {
-          const pixelsPerUnit = pixelLength / realLength;
-          const now = Date.now();
-
-          updateCalibration(currentImage.id, {
-            imageId: currentImage.id,
-            calibrationLine,
-            pixelsPerUnit,
-            timestamp: now,
-          });
-
-          onCalibrationComplete();
-        } else {
-          alert('Longitud inválida. Por favor, intenta de nuevo.');
-        }
-      }
-    } else if (extendingMeasurement) {
+    if (extendingMeasurement) {
       const extensionEndpoint = extendingMeasurement.isStart
         ? currentPoints[0]
         : currentPoints[currentPoints.length - 1];
@@ -1386,6 +1557,18 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
     const p = toImageCoords(x, y);
     const newPoint = { x: p.x, y: p.y };
 
+    // Calibration mode touch — click points
+    if (isCalibrationMode && calPhase === 'clickingPoints') {
+      const maxPoints = calMode === 'line' ? 2 : 4;
+      if (calCorners.length < maxPoints) {
+        const next = [...calCorners, newPoint];
+        setCalCorners(next);
+        if (next.length === maxPoints) setCalPhase('inputDimensions');
+      }
+      return;
+    }
+    if (isCalibrationMode) return;
+
     if (tracingPhase === 'editingMask') {
       setIsMaskPainting(true);
       setErasePreviewPoint(newPoint);
@@ -1393,7 +1576,7 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
       return;
     }
 
-    if (!isCalibrationMode && !isROIMode && tracingPhase === 'idle' && normalTool === 'erase') {
+    if (!isROIMode && tracingPhase === 'idle' && normalTool === 'erase') {
       setErasePreviewPoint(newPoint);
       const { next, changed } = eraseFromMeasurements(currentImage.measurements, newPoint, NORMAL_ERASE_BRUSH_RADIUS);
       eraseDraftRef.current = changed ? next : currentImage.measurements;
@@ -1417,7 +1600,7 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
       return;
     }
 
-    if (!isCalibrationMode && tracingPhase !== 'drawing' && normalTool === 'draw') {
+    if (tracingPhase !== 'drawing' && normalTool === 'draw') {
       for (const measurement of currentImage.measurements) {
         if (measurement.type === 'measurement' && measurement.points.length > 0) {
           const startPoint = measurement.points[0];
@@ -1468,13 +1651,16 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
     const p = toImageCoords(x, y);
     const newPoint = { x: p.x, y: p.y };
 
+    // Calibration — no drag needed
+    if (isCalibrationMode) return;
+
     if (tracingPhase === 'editingMask') {
       setErasePreviewPoint(newPoint);
       if (isMaskPainting) applyMaskBrushAtImagePoint(newPoint);
       return;
     }
 
-    if (!isCalibrationMode && !isROIMode && tracingPhase === 'idle' && normalTool === 'erase') {
+    if (!isROIMode && tracingPhase === 'idle' && normalTool === 'erase') {
       setErasePreviewPoint(newPoint);
     }
 
@@ -1501,9 +1687,7 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
     }
 
     if (isDrawing) {
-      if (isCalibrationMode) {
-        setCurrentPoints([currentPoints[0], newPoint]);
-      } else if (extendingMeasurement) {
+      if (extendingMeasurement) {
         if (extendingMeasurement.isStart) {
           setCurrentPoints((prev) => [newPoint, ...prev]);
         } else {
@@ -1575,16 +1759,194 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
   const toolsPanel = (
     <div className={styles.toolsPanel}>
       {isCalibrationMode && (
-        <div className={styles.calibrationBanner}>
-          📏 Modo calibración: Arrastra en el canvas para dibujar la línea de calibración
+        <div className={styles.calibrationSection}>
+          {/* Step 1: Choose calibration mode */}
+          {calPhase === 'choosingMode' && (
+            <>
+              <div className={styles.calibrationBanner} style={{
+                backgroundColor: 'rgba(255, 140, 0, 0.15)',
+                borderColor: '#FF8C00',
+              }}>
+                📏 Elige el modo de calibración
+              </div>
+              <button
+                className={styles.calModeBtn}
+                onClick={() => { setCalMode('line'); setCalPhase('clickingPoints'); }}
+              >
+                <strong>📐 Línea (2 puntos)</strong>
+                <span className={styles.calModeDesc}>Marca una distancia conocida. No modifica la imagen.</span>
+              </button>
+              <button
+                className={styles.calModeBtn}
+                onClick={() => { setCalMode('rect'); setCalPhase('clickingPoints'); }}
+              >
+                <strong>🔲 Rectángulo (4 esquinas)</strong>
+                <span className={styles.calModeDesc}>Corrige la perspectiva de la foto usando un rectángulo de referencia.</span>
+              </button>
+            </>
+          )}
+
+          {/* Step 2: Click points */}
+          {calPhase === 'clickingPoints' && (
+            <>
+              <div className={styles.calibrationBanner} style={{
+                backgroundColor: 'rgba(255, 140, 0, 0.15)',
+                borderColor: '#FF8C00',
+              }}>
+                {calMode === 'line'
+                  ? `📍 Haz clic en los 2 extremos de la referencia (${calCorners.length}/2)`
+                  : `📍 Haz clic en las 4 esquinas del rectángulo (${calCorners.length}/4)`}
+              </div>
+              <div className={styles.calSteps}>
+                {Array.from({ length: calMode === 'line' ? 2 : 4 }, (_, i) => (
+                  <div
+                    key={i}
+                    className={`${styles.calStep} ${calCorners.length === i ? styles.calStepActive : ''} ${calCorners.length > i ? styles.calStepDone : ''}`}
+                  >
+                    <span className={styles.calStepNum}>{i + 1}</span> {calMode === 'line' ? 'Punto' : 'Esquina'}
+                  </div>
+                ))}
+              </div>
+              {calCorners.length > 0 && (
+                <button
+                  className={styles.calRedrawBtn}
+                  onClick={() => setCalCorners(prev => prev.slice(0, -1))}
+                >
+                  ↩ Deshacer último punto
+                </button>
+              )}
+            </>
+          )}
+
+          {/* Step 3: Input dimensions */}
+          {calPhase === 'inputDimensions' && calMode === 'line' && (
+            <div className={styles.calInputRow}>
+              <div className={styles.calibrationBanner} style={{
+                backgroundColor: 'rgba(33, 150, 243, 0.15)',
+                borderColor: '#2196F3',
+              }}>
+                📐 Introduce la longitud real de la línea
+              </div>
+              <label className={styles.calInputLabel}>
+                Longitud real ({calibrationUnit}):
+                <input
+                  type="number"
+                  className={styles.calInput}
+                  value={calRealWidth}
+                  onChange={(e) => setCalRealWidth(e.target.value)}
+                  placeholder="ej. 30"
+                  min="0"
+                  step="any"
+                  autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && parseFloat(calRealWidth) > 0) handleLineCalibrationComplete();
+                    if (e.key === 'Escape') onCalibrationComplete();
+                  }}
+                />
+              </label>
+              <div className={styles.calInputActions}>
+                <button
+                  className={styles.calNextBtn}
+                  onClick={handleLineCalibrationComplete}
+                  disabled={!calRealWidth || parseFloat(calRealWidth) <= 0}
+                >
+                  ✓ Calibrar
+                </button>
+                <button
+                  className={styles.calRedrawBtn}
+                  onClick={() => { setCalCorners([]); setCalRealWidth(''); setCalPhase('clickingPoints'); }}
+                >
+                  Redibujar
+                </button>
+              </div>
+            </div>
+          )}
+
+          {calPhase === 'inputDimensions' && calMode === 'rect' && (
+            <div className={styles.calInputRow}>
+              <div className={styles.calibrationBanner} style={{
+                backgroundColor: 'rgba(33, 150, 243, 0.15)',
+                borderColor: '#2196F3',
+              }}>
+                📐 Introduce las dimensiones reales del rectángulo
+              </div>
+              <label className={styles.calInputLabel}>
+                Ancho real ({calibrationUnit}):
+                <input
+                  type="number"
+                  className={styles.calInput}
+                  value={calRealWidth}
+                  onChange={(e) => setCalRealWidth(e.target.value)}
+                  placeholder="ej. 21"
+                  min="0"
+                  step="any"
+                  autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') onCalibrationComplete();
+                  }}
+                />
+              </label>
+              <label className={styles.calInputLabel}>
+                Alto real ({calibrationUnit}):
+                <input
+                  type="number"
+                  className={styles.calInput}
+                  value={calRealHeight}
+                  onChange={(e) => setCalRealHeight(e.target.value)}
+                  placeholder="ej. 29.7"
+                  min="0"
+                  step="any"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && parseFloat(calRealWidth) > 0 && parseFloat(calRealHeight) > 0) {
+                      handleCalibrationComplete();
+                    }
+                    if (e.key === 'Escape') onCalibrationComplete();
+                  }}
+                />
+              </label>
+              <div className={styles.calInputActions}>
+                <button
+                  className={styles.calNextBtn}
+                  onClick={handleCalibrationComplete}
+                  disabled={!calRealWidth || parseFloat(calRealWidth) <= 0 || !calRealHeight || parseFloat(calRealHeight) <= 0 || calNormalizing}
+                >
+                  ✓ Calibrar
+                </button>
+                <button
+                  className={styles.calRedrawBtn}
+                  onClick={() => { setCalCorners([]); setCalRealWidth(''); setCalRealHeight(''); setCalPhase('clickingPoints'); }}
+                >
+                  Redibujar esquinas
+                </button>
+              </div>
+            </div>
+          )}
+
+          {calPhase === 'normalizing' && (
+            <div className={styles.calibrationBanner} style={{
+              backgroundColor: 'rgba(33, 150, 243, 0.15)',
+              borderColor: '#2196F3',
+            }}>
+              ⏳ Corrigiendo perspectiva…
+            </div>
+          )}
+
+          <button
+            className={styles.calCancelBtn}
+            onClick={onCalibrationComplete}
+            disabled={calNormalizing}
+          >
+            Cancelar calibración
+          </button>
         </div>
       )}
-      {isROIMode && (
+
+      {isROIMode && !isCalibrationMode && (
         <div className={styles.calibrationBanner} style={{ backgroundColor: 'rgba(33, 150, 243, 0.15)', borderColor: '#2196F3' }}>
           🔲 Modo ROI: Arrastra para definir la región de interés
         </div>
       )}
-      {tracingPhase === 'drawing' && !isCalibrationMode && !isROIMode && (
+      {tracingPhase === 'drawing' && !isROIMode && (
         <div className={styles.calibrationBanner} style={{ backgroundColor: 'rgba(0, 137, 123, 0.15)', borderColor: '#00897b' }}>
           🌱 Dibuja sobre las raíces — la medición se ajustará al esqueleto más cercano
         </div>
@@ -1765,13 +2127,13 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
           onTouchCancel={handleTouchEnd}
           onContextMenu={(e) => e.preventDefault()}
           style={{ 
-            cursor: (isAutoScanning || tracingPhase === 'computing' || tracingPhase === 'processing')
+            cursor: (isAutoScanning || tracingPhase === 'computing' || tracingPhase === 'processing' || calNormalizing)
               ? 'wait'
+              : isCalibrationMode && calPhase === 'clickingPoints'
+              ? 'crosshair'
               : isROIMode
               ? 'crosshair'
-              : isCalibrationMode
-              ? 'crosshair'
-                      : (!isCalibrationMode && !isROIMode && normalTool === 'erase' && (tracingPhase === 'idle' || tracingPhase === 'editingMask'))
+              : (!isROIMode && normalTool === 'erase' && (tracingPhase === 'idle' || tracingPhase === 'editingMask'))
                       ? 'none'
               : tracingPhase === 'drawing'
               ? 'crosshair'

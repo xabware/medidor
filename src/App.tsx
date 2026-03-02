@@ -10,8 +10,8 @@ import { saveProject, loadProject } from './utils/projectFile';
 import './App.css';
 
 function AppContent() {
-  const [isCalibrationMode, setIsCalibrationMode] = useState(false);
   const [isROIMode, setIsROIMode] = useState(false);
+  const [isCalibrationMode, setIsCalibrationMode] = useState(false);
   const [maxResolution, setMaxResolution] = useState<number | null>(1024);
   const [showTutorial, setShowTutorial] = useState(false);
   const [samModelId, setSamModelId] = useState<string | null>(null);
@@ -113,25 +113,24 @@ function AppContent() {
       <div className="app-layout">
         <aside className="sidebar left-sidebar">
           <ImageLoader 
-            onStartCalibration={() => setIsCalibrationMode(true)}
-            onCancelCalibration={() => setIsCalibrationMode(false)}
-            isCalibrationMode={isCalibrationMode}
             calibrationUnit={calibrationUnit}
             samModelId={samModelId}
             maxResolution={maxResolution}
             isROIMode={isROIMode}
             onStartROI={() => setIsROIMode(true)}
+            isCalibrationMode={isCalibrationMode}
+            onStartCalibration={() => setIsCalibrationMode(true)}
           />
         </aside>
 
         <main className="main-content">
           <ImageEditor
-            isCalibrationMode={isCalibrationMode}
-            onCalibrationComplete={() => setIsCalibrationMode(false)}
-            calibrationUnit={calibrationUnit}
             samModelId={samModelId}
             isROIMode={isROIMode}
             onROIComplete={() => setIsROIMode(false)}
+            isCalibrationMode={isCalibrationMode}
+            onCalibrationComplete={() => setIsCalibrationMode(false)}
+            calibrationUnit={calibrationUnit}
           />
         </main>
 
@@ -163,7 +162,7 @@ function AppContent() {
 
               <section>
                 <h3>📏 3. Calibrar</h3>
-                <p>Haz clic en el botón <strong>📏</strong> para activar el modo calibración. Dibuja una línea sobre un objeto de longitud conocida e introduce la medida real en cm.</p>
+                <p>Haz clic en el botón <strong>📏</strong> junto a cada imagen. Dibuja una línea sobre el <strong>ancho</strong> de la superficie de referencia, introduce su medida real, y repite para el <strong>alto</strong>. Si las líneas no son perpendiculares, la imagen se normalizará automáticamente para corregir la perspectiva.</p>
               </section>
 
               <section>
