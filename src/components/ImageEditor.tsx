@@ -2,7 +2,7 @@ import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react'
 import { createPortal } from 'react-dom';
 import { useMedidor } from '../context/useMedidor';
 import type { DrawingPoint, DrawingLine, ROIRegion } from '../types';
-import { calculateTotalDistance, drawLine, generateId } from '../utils/drawing';
+import { calculateTotalDistance, drawLine, generateId, smoothPolyline } from '../utils/drawing';
 import { getOrComputeEmbeddings, getLoadedModelId, computeMaskCandidates, processChosenMask, snapToSkeleton, clearEmbeddingsCache } from '../utils/samSegmentation';
 import type { MaskCandidate, MaskCandidatesResult, ProcessedMaskResult } from '../utils/samSegmentation';
 import { setDebugROIImageUrl, setDebugEnabled } from '../utils/samDebugVisualizer';
@@ -1417,9 +1417,11 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
     }
 
     if (extendingMeasurement) {
+      // Smooth only the newly-drawn extension portion
+      const smoothed = smoothPolyline(currentPoints);
       const extensionEndpoint = extendingMeasurement.isStart
-        ? currentPoints[0]
-        : currentPoints[currentPoints.length - 1];
+        ? smoothed[0]
+        : smoothed[smoothed.length - 1];
       const mergeTarget = findEndpointMergeTarget(
         currentImage.measurements,
         extensionEndpoint,
@@ -1429,7 +1431,7 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
 
       let updatedMeasurements: DrawingLine[];
       if (mergeTarget) {
-        const mergedPoints = mergePolylineAtEndpoint(currentPoints, extendingMeasurement.isStart, mergeTarget);
+        const mergedPoints = mergePolylineAtEndpoint(smoothed, extendingMeasurement.isStart, mergeTarget);
         const mergedMeasurement: DrawingLine = {
           id: extendingMeasurement.measurementId,
           points: mergedPoints,
@@ -1446,10 +1448,10 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
           mergedMeasurement,
         ];
       } else {
-        const pixelLength = calculateTotalDistance(currentPoints);
+        const pixelLength = calculateTotalDistance(smoothed);
         updatedMeasurements = currentImage.measurements.map((m) =>
           m.id === extendingMeasurement.measurementId
-            ? { ...m, points: currentPoints, pixelLength, timestamp: Date.now() }
+            ? { ...m, points: smoothed, pixelLength, timestamp: Date.now() }
             : m
         );
       }
@@ -1465,7 +1467,7 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
       setPrevMeasurementsStr(JSON.stringify(updatedMeasurements));
     } else {
       /* --- Snap to skeleton when in tracing draw mode --- */
-      let finalPoints = currentPoints;
+      let finalPoints = smoothPolyline(currentPoints);
       if (tracingPhase === 'drawing' && processedMask && currentImage.samROI) {
         const roi = getPixelAlignedROI(currentImage.samROI);
         // Convert drawn image-space coords to mask-space

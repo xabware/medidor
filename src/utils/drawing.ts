@@ -39,6 +39,54 @@ export function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 }
 
+/**
+ * Smooth a polyline using a Gaussian-weighted moving average.
+ * Removes high-frequency jitter from hand-drawn input while
+ * preserving the overall shape and start/end points.
+ *
+ * @param points  Raw polyline.
+ * @param radius  Half-window size (default 3 → window of 7 samples).
+ * @param passes  Number of smoothing iterations (default 2).
+ */
+export function smoothPolyline(
+  points: DrawingPoint[],
+  radius = 3,
+  passes = 2,
+): DrawingPoint[] {
+  if (points.length < 3) return points;
+
+  // Pre-compute Gaussian kernel for the given radius
+  const sigma = radius / 2;
+  const kernel: number[] = [];
+  let sum = 0;
+  for (let i = -radius; i <= radius; i++) {
+    const w = Math.exp(-(i * i) / (2 * sigma * sigma));
+    kernel.push(w);
+    sum += w;
+  }
+  for (let i = 0; i < kernel.length; i++) kernel[i] /= sum;
+
+  let src = points;
+  for (let pass = 0; pass < passes; pass++) {
+    const out: DrawingPoint[] = new Array(src.length);
+    // Keep endpoints fixed
+    out[0] = src[0];
+    out[src.length - 1] = src[src.length - 1];
+    for (let i = 1; i < src.length - 1; i++) {
+      let sx = 0, sy = 0;
+      for (let k = -radius; k <= radius; k++) {
+        const j = Math.min(Math.max(i + k, 0), src.length - 1);
+        const w = kernel[k + radius];
+        sx += src[j].x * w;
+        sy += src[j].y * w;
+      }
+      out[i] = { x: sx, y: sy };
+    }
+    src = out;
+  }
+  return src;
+}
+
 export function downloadCSV(data: Record<string, string | number>[], filename: string = 'mediciones.csv'): void {
   const headers = Object.keys(data[0] || {});
   
