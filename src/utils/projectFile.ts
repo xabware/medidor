@@ -4,7 +4,18 @@
  * Embeddings tensors are NOT saved — only the embeddingsModelId flag.
  */
 
-import type { LoadedImage, ImageCalibration, DrawingLine } from '../types';
+import type { LoadedImage, ImageCalibration, DrawingLine, DrawingPoint } from '../types';
+
+/** Old-format calibration stored in .raiz files prior to the rect/line rework. */
+interface LegacyCalibration {
+  imageId: string;
+  calibrationLine?: {
+    points: DrawingPoint[];
+    pixelLength?: number;
+  };
+  pixelsPerUnit?: number;
+  timestamp?: number;
+}
 
 // ── Serialisable subset of LoadedImage ───────────────────────────
 // `File` objects can't be serialised, so we store the essential metadata.
@@ -17,8 +28,7 @@ interface SerialisedImage {
   width: number;
   height: number;
   measurements: LoadedImage['measurements'];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  calibration?: LoadedImage['calibration'] | Record<string, any>;
+  calibration?: ImageCalibration | LegacyCalibration;
   timestamp: number;
   embeddingsModelId?: string;
   samROI?: LoadedImage['samROI'];
@@ -43,18 +53,18 @@ interface ProjectFile {
  * Old format had: { calibrationLine?: DrawingLine; pixelsPerUnit?: number }
  * New format has:  { mode; pixelsPerUnitX; pixelsPerUnitY; realWidth; realHeight; wasNormalized; … }
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function migrateCalibration(raw: Record<string, any>, imageId: string): ImageCalibration | undefined {
+function migrateCalibration(raw: ImageCalibration | LegacyCalibration, imageId: string): ImageCalibration | undefined {
   // Already in new format
-  if ('mode' in raw && 'pixelsPerUnitX' in raw) return raw as unknown as ImageCalibration;
+  if ('mode' in raw && 'pixelsPerUnitX' in raw) return raw as ImageCalibration;
 
   // Old format migration
-  const pixelsPerUnit: number | undefined = raw.pixelsPerUnit;
+  const legacy = raw as LegacyCalibration;
+  const pixelsPerUnit = legacy.pixelsPerUnit;
   if (pixelsPerUnit == null || pixelsPerUnit <= 0) return undefined;
 
-  const calLine = raw.calibrationLine;
-  const linePoints = calLine?.points?.length >= 2
-    ? [calLine.points[0], calLine.points[calLine.points.length - 1]] as [{ x: number; y: number }, { x: number; y: number }]
+  const calLine = legacy.calibrationLine;
+  const linePoints = calLine?.points?.length != null && calLine.points.length >= 2
+    ? [calLine.points[0], calLine.points[calLine.points.length - 1]] as [DrawingPoint, DrawingPoint]
     : undefined;
 
   const pixelLength: number = calLine?.pixelLength ?? 0;
@@ -69,7 +79,7 @@ function migrateCalibration(raw: Record<string, any>, imageId: string): ImageCal
     pixelsPerUnitX: pixelsPerUnit,
     pixelsPerUnitY: pixelsPerUnit,
     wasNormalized: false,
-    timestamp: raw.timestamp ?? Date.now(),
+    timestamp: legacy.timestamp ?? Date.now(),
   };
 }
 
@@ -168,7 +178,7 @@ export async function loadProject(): Promise<LoadedProject | null> {
           width: s.width,
           height: s.height,
           measurements: filterMeasurements(s.measurements),
-          calibration: s.calibration ? migrateCalibration(s.calibration as Record<string, unknown>, s.id) : undefined,
+          calibration: s.calibration ? migrateCalibration(s.calibration, s.id) : undefined,
           timestamp: s.timestamp,
           embeddingsModelId: s.embeddingsModelId,
           samROI: s.samROI,
