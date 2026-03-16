@@ -4,7 +4,7 @@
  * Embeddings tensors are NOT saved — only the embeddingsModelId flag.
  */
 
-import type { LoadedImage } from '../types';
+import type { LoadedImage, ImageCalibration, DrawingLine } from '../types';
 
 // ── Serialisable subset of LoadedImage ───────────────────────────
 // `File` objects can't be serialised, so we store the essential metadata.
@@ -17,7 +17,8 @@ interface SerialisedImage {
   width: number;
   height: number;
   measurements: LoadedImage['measurements'];
-  calibration?: LoadedImage['calibration'];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  calibration?: LoadedImage['calibration'] | Record<string, any>;
   timestamp: number;
   embeddingsModelId?: string;
   samROI?: LoadedImage['samROI'];
@@ -36,6 +37,46 @@ interface ProjectFile {
 }
 
 // Helpers
+
+/**
+ * Migrate old-format calibration (pre-b838177) to the current format.
+ * Old format had: { calibrationLine?: DrawingLine; pixelsPerUnit?: number }
+ * New format has:  { mode; pixelsPerUnitX; pixelsPerUnitY; realWidth; realHeight; wasNormalized; … }
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function migrateCalibration(raw: Record<string, any>, imageId: string): ImageCalibration | undefined {
+  // Already in new format
+  if ('mode' in raw && 'pixelsPerUnitX' in raw) return raw as unknown as ImageCalibration;
+
+  // Old format migration
+  const pixelsPerUnit: number | undefined = raw.pixelsPerUnit;
+  if (pixelsPerUnit == null || pixelsPerUnit <= 0) return undefined;
+
+  const calLine = raw.calibrationLine;
+  const linePoints = calLine?.points?.length >= 2
+    ? [calLine.points[0], calLine.points[calLine.points.length - 1]] as [{ x: number; y: number }, { x: number; y: number }]
+    : undefined;
+
+  const pixelLength: number = calLine?.pixelLength ?? 0;
+  const realLength = pixelLength > 0 ? pixelLength / pixelsPerUnit : 0;
+
+  return {
+    imageId,
+    mode: 'line',
+    linePoints,
+    realWidth: realLength,
+    realHeight: realLength,
+    pixelsPerUnitX: pixelsPerUnit,
+    pixelsPerUnitY: pixelsPerUnit,
+    wasNormalized: false,
+    timestamp: raw.timestamp ?? Date.now(),
+  };
+}
+
+/** Filter out old calibration-type measurements that are no longer used. */
+function filterMeasurements(measurements: DrawingLine[]): DrawingLine[] {
+  return measurements.filter((m) => m.type !== 'calibration');
+}
 
 function rehydrateFile(s: SerialisedImage): File {
   // Convert data-URL to Blob so we can build a real File
@@ -126,8 +167,8 @@ export async function loadProject(): Promise<LoadedProject | null> {
           dataUrl: s.dataUrl,
           width: s.width,
           height: s.height,
-          measurements: s.measurements,
-          calibration: s.calibration,
+          measurements: filterMeasurements(s.measurements),
+          calibration: s.calibration ? migrateCalibration(s.calibration as Record<string, unknown>, s.id) : undefined,
           timestamp: s.timestamp,
           embeddingsModelId: s.embeddingsModelId,
           samROI: s.samROI,
