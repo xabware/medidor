@@ -535,7 +535,11 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
     setPrevMeasurementsStr(JSON.stringify(measurements));
   }, [currentImage, setImages, historyIndex, history, setPrevMeasurementsStr]);
 
-  // Update canvas size based on container
+  // Update canvas size based on container.
+  // Re-run whenever currentImage becomes available so the observers
+  // are attached after the canvas container is mounted in the DOM
+  // (when there is no image the component renders a placeholder instead).
+  const hasImage = !!currentImage;
   useEffect(() => {
     const updateCanvasSize = () => {
       if (!containerRef.current) return;
@@ -556,9 +560,25 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
     if (containerRef.current) {
       resizeObserver.observe(containerRef.current);
     }
+
+    // On mobile the editor container starts with display:none (tab hidden).
+    // ResizeObserver does not always fire when the element becomes visible,
+    // so we watch class-attribute changes on the nearest ancestor that
+    // toggles the "mobile-hidden" class and re-measure after layout.
+    const mainEl = containerRef.current?.closest('main');
+    let mutationObserver: MutationObserver | undefined;
+    if (mainEl) {
+      mutationObserver = new MutationObserver(() => {
+        requestAnimationFrame(updateCanvasSize);
+      });
+      mutationObserver.observe(mainEl, { attributes: true, attributeFilter: ['class'] });
+    }
     
-    return () => resizeObserver.disconnect();
-  }, []);
+    return () => {
+      resizeObserver.disconnect();
+      mutationObserver?.disconnect();
+    };
+  }, [hasImage]);
 
   // Helper to draw endpoint circles
   const drawEndpoint = useCallback((ctx: CanvasRenderingContext2D, point: DrawingPoint, isHovered: boolean) => {
@@ -643,6 +663,20 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
     const canvas = canvasRef.current;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+
+    // Sync canvas size: if the container has a different size than our state
+    // (e.g. after a display:none → visible transition on mobile), update state
+    // so that the next render uses the correct dimensions.
+    if (containerRef.current) {
+      const rect = containerRef.current.getBoundingClientRect();
+      const cw = Math.floor(rect.width);
+      const ch = Math.floor(rect.height);
+      if (cw > 0 && ch > 0 && (cw !== canvasWidth || ch !== canvasHeight)) {
+        setCanvasWidth(cw);
+        setCanvasHeight(ch);
+        return; // bail – effect will re-run with updated dimensions
+      }
+    }
 
     // Set canvas size to container size (not image size)
     canvas.width = canvasWidth;
