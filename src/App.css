@@ -323,6 +323,66 @@ body {
 }
 
 /* Responsive design */
+
+/* ── Mobile menu ────────────────────────────────────────────── */
+.mobile-menu-btn {
+  background: none;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: 1.3rem;
+  padding: 4px 10px;
+  cursor: pointer;
+  line-height: 1;
+  color: var(--color-text);
+}
+
+.mobile-menu-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  background: rgba(0,0,0,0.4);
+}
+
+.mobile-menu-panel {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  animation: slideDown 0.2s ease;
+}
+
+@keyframes slideDown {
+  from { transform: translateY(-100%); }
+  to   { transform: translateY(0); }
+}
+
+.mobile-menu-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.mobile-menu-actions .header-action-btn {
+  flex: 1;
+  min-height: 44px;
+}
+
+/* ── Mobile tab bar ─────────────────────────────────────────── */
+.mobile-tab-bar {
+  display: none;
+}
+
+/* ── Mobile hidden panel ────────────────────────────────────── */
+.mobile-hidden {
+  display: none !important;
+}
+
 @media (max-width: 1400px) {
   .app-layout { grid-template-columns: 250px 1fr 280px; gap: var(--space-3); padding: var(--space-3); }
 }
@@ -380,43 +440,122 @@ body {
 @media (max-width: 768px) {
   .app-header {
     gap: 6px;
-    align-items: stretch;
+    padding: var(--space-2) var(--space-3);
+    min-height: 48px;
   }
 
-  .resolution-selector {
-    width: 100%;
-    justify-content: space-between;
+  .app-title {
+    flex: 0 1 auto;
+    font-size: 0.95rem;
   }
 
-  .resolution-selector select {
-    width: 140px;
+  /* ── Mobile tab layout ─────────────────────────────────── */
+  .app-layout.app-layout-mobile {
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+    gap: 0;
+    overflow: hidden;
+    /* leave room for header + tab bar */
   }
 
-  .header-actions {
-    width: 100%;
-    justify-content: stretch;
-    gap: 6px;
-  }
-
-  .header-action-btn,
-  .tutorial-button {
+  .app-layout-mobile > .left-sidebar,
+  .app-layout-mobile > .right-sidebar {
     flex: 1;
-    min-height: 42px;
-    padding: 8px 10px;
+    border-radius: 0;
+    border-left: 0;
+    border-right: 0;
+    overflow-y: auto;
   }
 
-  .app-layout {
-    gap: var(--space-2);
+  .app-layout-mobile > .main-content {
+    flex: 1;
+    min-height: 0;
+    border-radius: 0;
+    border-left: 0;
+    border-right: 0;
     padding: var(--space-2);
-    grid-template-rows: minmax(320px, 1fr) auto auto;
+    overflow: hidden;
   }
 
-  .main-content {
-    min-height: 360px;
-    padding: var(--space-2);
+  .mobile-tab-bar {
+    display: flex;
+    align-items: stretch;
+    background: var(--color-surface);
+    border-top: 1px solid var(--color-border);
+    flex-shrink: 0;
+    height: 56px;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
   }
 
-  .right-sidebar {
-    min-height: 260px;
+  .mobile-tab {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--color-text-muted);
+    font-size: 0.68rem;
+    font-weight: 600;
+    padding: 4px 0;
+    position: relative;
+    transition: color var(--transition), background var(--transition);
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .mobile-tab:active {
+    background: var(--color-toolbar-hover);
+  }
+
+  .mobile-tab-active {
+    color: var(--color-primary);
+  }
+
+  .mobile-tab-active::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 20%;
+    right: 20%;
+    height: 3px;
+    background: var(--color-primary);
+    border-radius: 0 0 3px 3px;
+  }
+
+  .mobile-tab-icon {
+    font-size: 1.3rem;
+    line-height: 1;
+  }
+
+  .mobile-tab-label {
+    line-height: 1;
+  }
+
+  .mobile-tab-badge {
+    position: absolute;
+    top: 4px;
+    right: calc(50% - 20px);
+    background: var(--color-primary);
+    color: white;
+    font-size: 0.6rem;
+    font-weight: 700;
+    min-width: 16px;
+    height: 16px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 4px;
+  }
+
+  /* Tutorial modal on mobile */
+  .tutorial-modal {
+    width: 100%;
+    max-height: 100dvh;
+    border-radius: 0;
   }
 }

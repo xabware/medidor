@@ -224,6 +224,7 @@ interface ImageEditorProps {
   isCalibrationMode: boolean;
   onCalibrationComplete: () => void;
   calibrationUnit: string;
+  isMobile?: boolean;
 }
 
 export const ImageEditor: React.FC<ImageEditorProps> = ({ 
@@ -233,6 +234,7 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
   isCalibrationMode,
   onCalibrationComplete,
   calibrationUnit,
+  isMobile = false,
 }) => {
   const { getCurrentImage, setImages, updateSamROI, updateCalibration } = useMedidor();
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -243,6 +245,8 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
   const [currentPoints, setCurrentPoints] = useState<DrawingPoint[]>([]);
   const [isPanning, setIsPanning] = useState(false);
   const [panStart, setPanStart] = useState<{ x: number; y: number } | null>(null);
+  const lastPinchDistRef = useRef<number | null>(null);
+  const pinchCenterRef = useRef<{ x: number; y: number } | null>(null);
   const [hoveredEndpoint, setHoveredEndpoint] = useState<{ measurementId: string; isStart: boolean } | null>(null);
   const [extendingMeasurement, setExtendingMeasurement] = useState<{ measurementId: string; isStart: boolean } | null>(null);
   // ROI drawing state
@@ -1549,8 +1553,19 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
     if (e.touches.length >= 2) {
       const t0 = e.touches[0];
       const t1 = e.touches[1];
+      const dist = Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
+      lastPinchDistRef.current = dist;
+      const cx = (t0.clientX + t1.clientX) / 2;
+      const cy = (t0.clientY + t1.clientY) / 2;
+      pinchCenterRef.current = { x: cx, y: cy };
       setIsPanning(true);
-      setPanStart({ x: (t0.clientX + t1.clientX) / 2, y: (t0.clientY + t1.clientY) / 2 });
+      setPanStart({ x: cx, y: cy });
+      // Cancel any in-progress drawing when a second finger appears
+      if (isDrawing) {
+        setIsDrawing(false);
+        setCurrentPoints([]);
+        setExtendingMeasurement(null);
+      }
       return;
     }
 
@@ -1640,11 +1655,33 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
       const t1 = e.touches[1];
       const cx = (t0.clientX + t1.clientX) / 2;
       const cy = (t0.clientY + t1.clientY) / 2;
+
+      // Pan
       const dx = cx - panStart.x;
       const dy = cy - panStart.y;
       setOffsetX(prev => prev + dx);
       setOffsetY(prev => prev + dy);
       setPanStart({ x: cx, y: cy });
+
+      // Pinch-to-zoom
+      const dist = Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
+      if (lastPinchDistRef.current !== null && canvasRef.current) {
+        const scaleFactor = dist / lastPinchDistRef.current;
+        const newScale = Math.min(10, Math.max(0.1, viewScale * scaleFactor));
+
+        const canvas = canvasRef.current;
+        const rect = canvas.getBoundingClientRect();
+        const canvasCX = (cx - rect.left) * (canvas.width / rect.width);
+        const canvasCY = (cy - rect.top) * (canvas.height / rect.height);
+
+        const wx = (canvasCX - offsetX) / viewScale;
+        const wy = (canvasCY - offsetY) / viewScale;
+
+        setViewScale(newScale);
+        setOffsetX(canvasCX - wx * newScale + dx);
+        setOffsetY(canvasCY - wy * newScale + dy);
+      }
+      lastPinchDistRef.current = dist;
       return;
     }
 
@@ -1705,11 +1742,21 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
     e.preventDefault();
     if (e.touches.length >= 2) return;
     if (e.touches.length === 1 && isPanning) {
+      // One finger lifted during 2-finger gesture — wait for full release
       setIsPanning(false);
       setPanStart(null);
+      lastPinchDistRef.current = null;
+      pinchCenterRef.current = null;
       return;
     }
     if (e.touches.length === 0) {
+      if (isPanning) {
+        setIsPanning(false);
+        setPanStart(null);
+        lastPinchDistRef.current = null;
+        pinchCenterRef.current = null;
+        return;
+      }
       if (isMaskPainting) {
         setIsMaskPainting(false);
         return;
@@ -2079,8 +2126,9 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
   );
 
   return (
-    <div className={styles.editor}>
-      {toolsHostEl ? createPortal(toolsPanel, toolsHostEl) : toolsPanel}
+    <div className={`${styles.editor} ${isMobile ? styles.editorMobile : ''}`}>
+      {/* On mobile, always render inline; on desktop, portal to sidebar if available */}
+      {isMobile ? toolsPanel : (toolsHostEl ? createPortal(toolsPanel, toolsHostEl) : toolsPanel)}
 
       {/* Mask picker overlay — phase: pickingMask */}
       {tracingPhase === 'pickingMask' && maskCandidatesResult && (

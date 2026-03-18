@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { MedidorProvider } from './context/MedidorContext';
 import { useMedidor } from './context/useMedidor';
 import { ImageLoader } from './components/ImageLoader';
@@ -9,12 +9,28 @@ import { compressImage } from './utils/imageCompression';
 import { saveProject, loadProject } from './utils/projectFile';
 import './App.css';
 
+type MobileTab = 'images' | 'editor' | 'measurements';
+
+function useIsMobile(breakpoint = 768) {
+  const [isMobile, setIsMobile] = useState(() => window.innerWidth <= breakpoint);
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${breakpoint}px)`);
+    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, [breakpoint]);
+  return isMobile;
+}
+
 function AppContent() {
   const [isROIMode, setIsROIMode] = useState(false);
   const [isCalibrationMode, setIsCalibrationMode] = useState(false);
   const [maxResolution, setMaxResolution] = useState<number | null>(1024);
   const [showTutorial, setShowTutorial] = useState(false);
   const [samModelId, setSamModelId] = useState<string | null>(null);
+  const [mobileTab, setMobileTab] = useState<MobileTab>('editor');
+  const [showMobileMenu, setShowMobileMenu] = useState(false);
+  const isMobile = useIsMobile();
   const calibrationUnit = 'cm';
   const { images, setImages, currentImageId, setCurrentImage } = useMedidor();
 
@@ -79,51 +95,105 @@ function AppContent() {
     <div className="app-container">
       <header className="app-header">
         <h1 className="app-title">🌱 Medidor de Raíces</h1>
-        <SAMModelSelector onModelStateChange={(ready, modelId) => setSamModelId(ready ? modelId : null)} />
-        <div className="resolution-selector" title="Resolución máxima de las imágenes cargadas">
-          📐
-          <select
-            value={maxResolution === null ? 'original' : String(maxResolution)}
-            onChange={(e) => {
-              const val = e.target.value;
-              handleResolutionChange(val === 'original' ? null : Number(val));
-            }}
+
+        {/* Desktop: show all header controls inline */}
+        {!isMobile && (
+          <>
+            <SAMModelSelector onModelStateChange={(ready, modelId) => setSamModelId(ready ? modelId : null)} />
+            <div className="resolution-selector" title="Resolución máxima de las imágenes cargadas">
+              📐
+              <select
+                value={maxResolution === null ? 'original' : String(maxResolution)}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  handleResolutionChange(val === 'original' ? null : Number(val));
+                }}
+              >
+                <option value="original">Original</option>
+                <option value="4096">4096 px</option>
+                <option value="3072">3072 px</option>
+                <option value="2048">2048 px</option>
+                <option value="1024">1024 px</option>
+                <option value="512">512 px</option>
+              </select>
+            </div>
+            <div className="header-actions">
+              <button className="header-action-btn" onClick={handleSave} title="Guardar proyecto (.raiz)">
+                💾 Guardar
+              </button>
+              <button className="header-action-btn" onClick={handleLoad} title="Cargar proyecto (.raiz)">
+                📂 Cargar
+              </button>
+              <button className="tutorial-button" onClick={() => setShowTutorial(true)}>
+                ❓ Tutorial
+              </button>
+            </div>
+          </>
+        )}
+
+        {/* Mobile: hamburger menu */}
+        {isMobile && (
+          <button
+            className="mobile-menu-btn"
+            onClick={() => setShowMobileMenu(prev => !prev)}
+            aria-label="Menú"
           >
-            <option value="original">Original</option>
-            <option value="4096">4096 px</option>
-            <option value="3072">3072 px</option>
-            <option value="2048">2048 px</option>
-            <option value="1024">1024 px</option>
-            <option value="512">512 px</option>
-          </select>
-        </div>
-        <div className="header-actions">
-          <button className="header-action-btn" onClick={handleSave} title="Guardar proyecto (.raiz)">
-            💾 Guardar
+            ☰
           </button>
-          <button className="header-action-btn" onClick={handleLoad} title="Cargar proyecto (.raiz)">
-            📂 Cargar
-          </button>
-          <button className="tutorial-button" onClick={() => setShowTutorial(true)}>
-            ❓ Tutorial
-          </button>
-        </div>
+        )}
       </header>
+
+      {/* Mobile dropdown menu */}
+      {isMobile && showMobileMenu && (
+        <div className="mobile-menu-overlay" onClick={() => setShowMobileMenu(false)}>
+          <div className="mobile-menu-panel" onClick={(e) => e.stopPropagation()}>
+            <SAMModelSelector onModelStateChange={(ready, modelId) => setSamModelId(ready ? modelId : null)} />
+            <div className="resolution-selector" title="Resolución máxima">
+              📐
+              <select
+                value={maxResolution === null ? 'original' : String(maxResolution)}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  handleResolutionChange(val === 'original' ? null : Number(val));
+                }}
+              >
+                <option value="original">Original</option>
+                <option value="4096">4096 px</option>
+                <option value="3072">3072 px</option>
+                <option value="2048">2048 px</option>
+                <option value="1024">1024 px</option>
+                <option value="512">512 px</option>
+              </select>
+            </div>
+            <div className="mobile-menu-actions">
+              <button className="header-action-btn" onClick={() => { handleSave(); setShowMobileMenu(false); }}>
+                💾 Guardar
+              </button>
+              <button className="header-action-btn" onClick={() => { void handleLoad(); setShowMobileMenu(false); }}>
+                📂 Cargar
+              </button>
+              <button className="header-action-btn" onClick={() => { setShowTutorial(true); setShowMobileMenu(false); }}>
+                ❓ Tutorial
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       
-      <div className="app-layout">
-        <aside className="sidebar left-sidebar">
+      <div className={`app-layout ${isMobile ? 'app-layout-mobile' : ''}`}>
+        <aside className={`sidebar left-sidebar ${isMobile && mobileTab !== 'images' ? 'mobile-hidden' : ''}`}>
           <ImageLoader 
             calibrationUnit={calibrationUnit}
             samModelId={samModelId}
             maxResolution={maxResolution}
             isROIMode={isROIMode}
-            onStartROI={() => setIsROIMode(true)}
+            onStartROI={() => { setIsROIMode(true); if (isMobile) setMobileTab('editor'); }}
             isCalibrationMode={isCalibrationMode}
-            onStartCalibration={() => setIsCalibrationMode(true)}
+            onStartCalibration={() => { setIsCalibrationMode(true); if (isMobile) setMobileTab('editor'); }}
           />
         </aside>
 
-        <main className="main-content">
+        <main className={`main-content ${isMobile && mobileTab !== 'editor' ? 'mobile-hidden' : ''}`}>
           <ImageEditor
             samModelId={samModelId}
             isROIMode={isROIMode}
@@ -131,16 +201,45 @@ function AppContent() {
             isCalibrationMode={isCalibrationMode}
             onCalibrationComplete={() => setIsCalibrationMode(false)}
             calibrationUnit={calibrationUnit}
+            isMobile={isMobile}
           />
         </main>
 
-        <aside className="sidebar right-sidebar">
+        <aside className={`sidebar right-sidebar ${isMobile && mobileTab !== 'measurements' ? 'mobile-hidden' : ''}`}>
           <div className="right-panel top-panel">
             <MeasurementsPanel calibrationUnit={calibrationUnit} />
           </div>
           <div className="right-panel bottom-panel" id="editor-tools-host" />
         </aside>
       </div>
+
+      {/* Mobile bottom tab bar */}
+      {isMobile && (
+        <nav className="mobile-tab-bar">
+          <button
+            className={`mobile-tab ${mobileTab === 'images' ? 'mobile-tab-active' : ''}`}
+            onClick={() => setMobileTab('images')}
+          >
+            <span className="mobile-tab-icon">📷</span>
+            <span className="mobile-tab-label">Imágenes</span>
+            {images.length > 0 && <span className="mobile-tab-badge">{images.length}</span>}
+          </button>
+          <button
+            className={`mobile-tab ${mobileTab === 'editor' ? 'mobile-tab-active' : ''}`}
+            onClick={() => setMobileTab('editor')}
+          >
+            <span className="mobile-tab-icon">🖌️</span>
+            <span className="mobile-tab-label">Editor</span>
+          </button>
+          <button
+            className={`mobile-tab ${mobileTab === 'measurements' ? 'mobile-tab-active' : ''}`}
+            onClick={() => setMobileTab('measurements')}
+          >
+            <span className="mobile-tab-icon">📏</span>
+            <span className="mobile-tab-label">Mediciones</span>
+          </button>
+        </nav>
+      )}
 
       {showTutorial && (
         <div className="tutorial-overlay" onClick={() => setShowTutorial(false)}>

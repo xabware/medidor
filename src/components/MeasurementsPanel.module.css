@@ -103,3 +103,40 @@
   color: var(--color-text-muted);
   margin: var(--space-2) 0 0 0;
 }
+
+/* ── Mobile touch-friendly styles ───────────────────────────── */
+@media (max-width: 768px) {
+  .panel {
+    padding: var(--space-3);
+  }
+
+  .panel h2 {
+    font-size: 0.95rem;
+  }
+
+  .measurements li {
+    padding: var(--space-3);
+  }
+
+  .measurements li span {
+    font-size: 0.82rem;
+  }
+
+  .deleteBtn {
+    min-height: 36px;
+    min-width: 36px;
+    padding: var(--space-2);
+    font-size: 0.82rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .btn {
+    min-height: 44px;
+    font-size: 0.85rem;
+    padding: 10px 12px;
+    -webkit-tap-highlight-color: transparent;
+  }
+}

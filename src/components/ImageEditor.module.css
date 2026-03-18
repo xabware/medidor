@@ -464,9 +464,10 @@
 @media (max-width: 768px) {
   .toolbarButton,
   .embeddingsBtn {
-    min-height: 40px;
+    min-height: 44px;
     padding: 8px 10px;
     font-size: 0.8rem;
+    -webkit-tap-highlight-color: transparent;
   }
 
   .normalToolGroup,
@@ -487,5 +488,65 @@
 
   .maskEditorLabel input {
     width: 180px;
+  }
+
+  /* Mobile editor layout: tools compact above canvas */
+  .editorMobile {
+    gap: 0;
+  }
+
+  .editorMobile .toolsPanel {
+    padding: var(--space-2);
+    max-height: none;
+    overflow: visible;
+  }
+
+  .editorMobile .toolsSections {
+    gap: 6px;
+  }
+
+  .editorMobile .toolSection {
+    padding: 6px;
+  }
+
+  .editorMobile .sectionTitle {
+    margin-bottom: 4px;
+    font-size: 0.68rem;
+  }
+
+  .editorMobile .toolbar {
+    gap: 4px;
+    flex-wrap: wrap;
+  }
+
+  .editorMobile .canvasContainer {
+    flex: 1;
+    min-height: 0;
+  }
+
+  /* Calibration on mobile */
+  .calibrationSection {
+    padding: 8px;
+  }
+
+  .calModeBtn {
+    padding: 8px 10px;
+  }
+
+  .calModeBtn strong {
+    font-size: 0.78rem;
+  }
+
+  .maskPickerPanel {
+    padding: 12px;
+    max-height: 85vh;
+  }
+
+  .maskPickerCards {
+    gap: 8px;
+  }
+
+  .maskPickerCard {
+    padding: 6px;
   }
 }
