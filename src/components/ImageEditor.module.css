@@ -490,38 +490,165 @@
     width: 180px;
   }
 
-  /* Mobile editor layout: tools compact above canvas */
+  /* ── Mobile editor layout ─────────────────────────────── */
   .editorMobile {
     gap: 0;
-  }
-
-  .editorMobile .toolsPanel {
-    padding: var(--space-2);
-    max-height: none;
-    overflow: visible;
-  }
-
-  .editorMobile .toolsSections {
-    gap: 6px;
-  }
-
-  .editorMobile .toolSection {
-    padding: 6px;
-  }
-
-  .editorMobile .sectionTitle {
-    margin-bottom: 4px;
-    font-size: 0.68rem;
-  }
-
-  .editorMobile .toolbar {
-    gap: 4px;
-    flex-wrap: wrap;
+    height: 100%;
+    overflow: hidden;
   }
 
   .editorMobile .canvasContainer {
     flex: 1;
     min-height: 0;
+  }
+
+  /* ── Mobile horizontal tool strip ─────────────────────── */
+  .mobileToolStrip {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px;
+    background: var(--color-surface);
+    border-bottom: 1px solid var(--color-border);
+    flex-shrink: 0;
+    min-height: 0;
+  }
+
+  .mobileToolScroll {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    flex: 1;
+    min-width: 0;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    padding: 2px 0;
+  }
+
+  .mobileToolScroll::-webkit-scrollbar {
+    display: none;
+  }
+
+  .mobileTool {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    min-width: 40px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: var(--color-toolbar-bg);
+    color: var(--color-text);
+    font-size: 1.15rem;
+    cursor: pointer;
+    flex-shrink: 0;
+    -webkit-tap-highlight-color: transparent;
+    transition: background var(--transition), border-color var(--transition);
+    padding: 0;
+    line-height: 1;
+  }
+
+  .mobileTool:active:not(:disabled) {
+    background: var(--color-toolbar-hover);
+  }
+
+  .mobileTool:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+
+  .mobileToolActive {
+    background: var(--color-teal) !important;
+    border-color: var(--color-teal) !important;
+    color: white !important;
+  }
+
+  .mobileToolReady {
+    background: rgba(25, 135, 84, 0.12);
+    border-color: var(--color-success);
+  }
+
+  .mobileToolDanger {
+    background: rgba(220, 53, 69, 0.1);
+    border-color: var(--color-danger);
+    color: var(--color-danger);
+  }
+
+  .mobileToolDivider {
+    width: 1px;
+    height: 24px;
+    background: var(--color-border);
+    flex-shrink: 0;
+    margin: 0 2px;
+  }
+
+  .mobileStatusPill {
+    font-size: 0.7rem;
+    font-weight: 700;
+    white-space: nowrap;
+    padding: 3px 8px;
+    border-radius: 999px;
+    background: var(--color-surface-active);
+    border: 1px solid var(--color-border);
+    color: var(--color-text);
+    flex-shrink: 0;
+  }
+
+  /* ── Mobile calibration sheet ─────────────────────────── */
+  .mobileSheetOverlay {
+    position: fixed;
+    inset: 0;
+    z-index: 8000;
+    background: rgba(0, 0, 0, 0.4);
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+  }
+
+  .mobileSheet {
+    width: 100%;
+    max-height: 60vh;
+    overflow-y: auto;
+    background: var(--color-surface);
+    border-top-left-radius: var(--radius);
+    border-top-right-radius: var(--radius);
+    padding: var(--space-4);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    box-shadow: 0 -4px 20px rgba(0,0,0,0.15);
+    animation: sheetUp 0.25s ease;
+  }
+
+  @keyframes sheetUp {
+    from { transform: translateY(100%); }
+    to   { transform: translateY(0); }
+  }
+
+  .mobileSheetTitle {
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: var(--color-text);
+    text-align: center;
+  }
+
+  .mobileSheet .calModeBtn {
+    padding: var(--space-3);
+  }
+
+  .mobileSheet .calInput {
+    min-height: 44px;
+    font-size: 0.9rem;
+  }
+
+  .mobileSheet .calNextBtn,
+  .mobileSheet .calRedrawBtn,
+  .mobileSheet .calCancelBtn {
+    min-height: 44px;
+    font-size: 0.85rem;
   }
 
   /* Calibration on mobile */
@@ -548,5 +675,13 @@
 
   .maskPickerCard {
     padding: 6px;
+  }
+}
+
+/* Hide mobile-only elements on desktop */
+@media (min-width: 769px) {
+  .mobileToolStrip,
+  .mobileSheetOverlay {
+    display: none;
   }
 }

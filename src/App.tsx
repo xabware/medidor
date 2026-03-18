@@ -198,8 +198,10 @@ function AppContent() {
             samModelId={samModelId}
             isROIMode={isROIMode}
             onROIComplete={() => setIsROIMode(false)}
+            onStartROI={() => setIsROIMode(true)}
             isCalibrationMode={isCalibrationMode}
             onCalibrationComplete={() => setIsCalibrationMode(false)}
+            onStartCalibration={() => setIsCalibrationMode(true)}
             calibrationUnit={calibrationUnit}
             isMobile={isMobile}
           />

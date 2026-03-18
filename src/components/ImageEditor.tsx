@@ -221,8 +221,10 @@ interface ImageEditorProps {
   samModelId: string | null;
   isROIMode: boolean;
   onROIComplete: () => void;
+  onStartROI?: () => void;
   isCalibrationMode: boolean;
   onCalibrationComplete: () => void;
+  onStartCalibration?: () => void;
   calibrationUnit: string;
   isMobile?: boolean;
 }
@@ -231,8 +233,10 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
   samModelId,
   isROIMode,
   onROIComplete,
+  onStartROI,
   isCalibrationMode,
   onCalibrationComplete,
+  onStartCalibration,
   calibrationUnit,
   isMobile = false,
 }) => {
@@ -2125,10 +2129,285 @@ export const ImageEditor: React.FC<ImageEditorProps> = ({
     </div>
   );
 
+  // ── Mobile horizontal toolbar strip ──────────────────────────
+  const mobileToolbar = currentImage ? (
+    <div className={styles.mobileToolStrip}>
+      {/* Status / progress line */}
+      {(isComputingEmbeddings || isAutoScanning || tracingPhase === 'computing' || tracingPhase === 'processing') && (
+        <div className={styles.mobileStatusPill}>
+          {isComputingEmbeddings && `🧠 ${Math.round(embeddingsProgress ?? 0)}%`}
+          {isAutoScanning && `🔍 ${autoScanProgress}%`}
+          {(tracingPhase === 'computing' || tracingPhase === 'processing') && `🌱 ${tracingProgress}%`}
+        </div>
+      )}
+      {/* Context banners (very compact) */}
+      {isCalibrationMode && calPhase === 'clickingPoints' && (
+        <div className={styles.mobileStatusPill}>
+          {calMode === 'line'
+            ? `📍 ${calCorners.length}/2`
+            : `📍 ${calCorners.length}/4`}
+        </div>
+      )}
+      {isROIMode && !isCalibrationMode && (
+        <div className={styles.mobileStatusPill}>🔲 ROI</div>
+      )}
+      {tracingPhase === 'drawing' && (
+        <div className={styles.mobileStatusPill}>🌱 Dibuja</div>
+      )}
+
+      <div className={styles.mobileToolScroll}>
+        {/* Drawing tools */}
+        <button
+          className={`${styles.mobileTool} ${normalTool === 'draw' && !isCalibrationMode && !isROIMode ? styles.mobileToolActive : ''}`}
+          onClick={() => setNormalTool('draw')}
+          title="Pintar"
+        >
+          ✏️
+        </button>
+        <button
+          className={`${styles.mobileTool} ${normalTool === 'erase' ? styles.mobileToolActive : ''}`}
+          onClick={() => setNormalTool('erase')}
+          title="Borrar"
+        >
+          🧽
+        </button>
+
+        <div className={styles.mobileToolDivider} />
+
+        <button
+          className={styles.mobileTool}
+          onClick={handleUndo}
+          disabled={historyIndex <= 0}
+          title="Deshacer"
+        >
+          ↶
+        </button>
+        <button
+          className={styles.mobileTool}
+          onClick={handleRedo}
+          disabled={historyIndex >= history.length - 1}
+          title="Rehacer"
+        >
+          ↷
+        </button>
+
+        <div className={styles.mobileToolDivider} />
+
+        {/* Calibration */}
+        {!isCalibrationMode && (
+          <button
+            className={styles.mobileTool}
+            onClick={() => onStartCalibration?.()}
+            disabled={isROIMode}
+            title="Calibrar"
+          >
+            📏
+          </button>
+        )}
+        {isCalibrationMode && calCorners.length > 0 && (
+          <button
+            className={styles.mobileTool}
+            onClick={() => setCalCorners(prev => prev.slice(0, -1))}
+            title="Deshacer punto"
+          >
+            ↩
+          </button>
+        )}
+        {isCalibrationMode && (
+          <button
+            className={`${styles.mobileTool} ${styles.mobileToolDanger}`}
+            onClick={onCalibrationComplete}
+            disabled={calNormalizing}
+            title="Cancelar calibración"
+          >
+            ✕
+          </button>
+        )}
+
+        {/* ROI */}
+        {samModelId && (
+          <button
+            className={`${styles.mobileTool} ${currentImage.samROI ? styles.mobileToolReady : ''}`}
+            onClick={() => onStartROI?.()}
+            disabled={!samModelId || isCalibrationMode || isROIMode}
+            title={currentImage.samROI ? 'Redefinir ROI' : 'Definir ROI'}
+          >
+            🔲
+          </button>
+        )}
+
+        <div className={styles.mobileToolDivider} />
+
+        {/* AI tools */}
+        <button
+          className={`${styles.mobileTool} ${embeddingsReady ? styles.mobileToolReady : ''}`}
+          onClick={handleComputeEmbeddings}
+          disabled={!samModelId || !currentImage.samROI || isComputingEmbeddings || (tracingPhase !== 'idle' && tracingPhase !== 'editingMask')}
+          title="Embeddings"
+        >
+          🧠
+        </button>
+        <button
+          className={`${styles.mobileTool} ${tracingPhase !== 'idle' ? styles.mobileToolActive : ''}`}
+          onClick={handleStartTracing}
+          disabled={!embeddingsReady || isAutoScanning || tracingPhase === 'computing' || tracingPhase === 'processing' || tracingPhase === 'editingMask'}
+          title="Trazar"
+        >
+          🌱
+        </button>
+        <button
+          className={styles.mobileTool}
+          onClick={handleAutoScan}
+          disabled={!embeddingsReady || isAutoScanning || tracingPhase !== 'idle'}
+          title="Auto-escaneo"
+        >
+          🔍
+        </button>
+
+        {tracingPhase === 'editingMask' && (
+          <>
+            <button className={styles.mobileTool} onClick={handleApplyManualErosion} title="Erosión">⊖</button>
+            <button className={styles.mobileTool} onClick={handleRestoreSelectedMask} title="Restaurar">♻</button>
+            <button className={`${styles.mobileTool} ${styles.mobileToolActive}`} onClick={handleProcessEditedMask} title="Usar máscara">✓</button>
+            <button className={`${styles.mobileTool} ${styles.mobileToolDanger}`} onClick={handleCancelTracing} title="Cancelar">✕</button>
+          </>
+        )}
+      </div>
+    </div>
+  ) : null;
+
+  // ── Mobile calibration sheet (overlay for input fields) ──────
+  const mobileCalibrationSheet = isMobile && isCalibrationMode && (calPhase === 'choosingMode' || calPhase === 'inputDimensions' || calPhase === 'normalizing') ? (
+    <div className={styles.mobileSheetOverlay}>
+      <div className={styles.mobileSheet}>
+        {calPhase === 'choosingMode' && (
+          <>
+            <div className={styles.mobileSheetTitle}>📏 Modo de calibración</div>
+            <button
+              className={styles.calModeBtn}
+              onClick={() => { setCalMode('line'); setCalPhase('clickingPoints'); }}
+            >
+              <strong>📐 Línea (2 puntos)</strong>
+              <span className={styles.calModeDesc}>Marca una distancia conocida.</span>
+            </button>
+            <button
+              className={styles.calModeBtn}
+              onClick={() => { setCalMode('rect'); setCalPhase('clickingPoints'); }}
+            >
+              <strong>🔲 Rectángulo (4 esquinas)</strong>
+              <span className={styles.calModeDesc}>Corrige la perspectiva.</span>
+            </button>
+            <button
+              className={styles.calCancelBtn}
+              onClick={onCalibrationComplete}
+            >
+              Cancelar
+            </button>
+          </>
+        )}
+        {calPhase === 'inputDimensions' && calMode === 'line' && (
+          <>
+            <div className={styles.mobileSheetTitle}>📐 Longitud real</div>
+            <label className={styles.calInputLabel}>
+              Longitud ({calibrationUnit}):
+              <input
+                type="number"
+                className={styles.calInput}
+                value={calRealWidth}
+                onChange={(e) => setCalRealWidth(e.target.value)}
+                placeholder="ej. 30"
+                min="0"
+                step="any"
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && parseFloat(calRealWidth) > 0) handleLineCalibrationComplete();
+                }}
+              />
+            </label>
+            <div className={styles.calInputActions}>
+              <button
+                className={styles.calNextBtn}
+                onClick={handleLineCalibrationComplete}
+                disabled={!calRealWidth || parseFloat(calRealWidth) <= 0}
+              >
+                ✓ Calibrar
+              </button>
+              <button
+                className={styles.calRedrawBtn}
+                onClick={() => { setCalCorners([]); setCalRealWidth(''); setCalPhase('clickingPoints'); }}
+              >
+                Redibujar
+              </button>
+            </div>
+          </>
+        )}
+        {calPhase === 'inputDimensions' && calMode === 'rect' && (
+          <>
+            <div className={styles.mobileSheetTitle}>📐 Dimensiones reales</div>
+            <label className={styles.calInputLabel}>
+              Ancho ({calibrationUnit}):
+              <input
+                type="number"
+                className={styles.calInput}
+                value={calRealWidth}
+                onChange={(e) => setCalRealWidth(e.target.value)}
+                placeholder="ej. 21"
+                min="0"
+                step="any"
+                autoFocus
+              />
+            </label>
+            <label className={styles.calInputLabel}>
+              Alto ({calibrationUnit}):
+              <input
+                type="number"
+                className={styles.calInput}
+                value={calRealHeight}
+                onChange={(e) => setCalRealHeight(e.target.value)}
+                placeholder="ej. 29.7"
+                min="0"
+                step="any"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && parseFloat(calRealWidth) > 0 && parseFloat(calRealHeight) > 0) {
+                    handleCalibrationComplete();
+                  }
+                }}
+              />
+            </label>
+            <div className={styles.calInputActions}>
+              <button
+                className={styles.calNextBtn}
+                onClick={handleCalibrationComplete}
+                disabled={!calRealWidth || parseFloat(calRealWidth) <= 0 || !calRealHeight || parseFloat(calRealHeight) <= 0 || calNormalizing}
+              >
+                ✓ Calibrar
+              </button>
+              <button
+                className={styles.calRedrawBtn}
+                onClick={() => { setCalCorners([]); setCalRealWidth(''); setCalRealHeight(''); setCalPhase('clickingPoints'); }}
+              >
+                Redibujar
+              </button>
+            </div>
+          </>
+        )}
+        {calPhase === 'normalizing' && (
+          <div className={styles.calibrationBanner} style={{ backgroundColor: 'rgba(33, 150, 243, 0.15)', borderColor: '#2196F3' }}>
+            ⏳ Corrigiendo perspectiva…
+          </div>
+        )}
+      </div>
+    </div>
+  ) : null;
+
   return (
     <div className={`${styles.editor} ${isMobile ? styles.editorMobile : ''}`}>
-      {/* On mobile, always render inline; on desktop, portal to sidebar if available */}
-      {isMobile ? toolsPanel : (toolsHostEl ? createPortal(toolsPanel, toolsHostEl) : toolsPanel)}
+      {/* Desktop: full tools panel in sidebar portal (or inline fallback) */}
+      {!isMobile && (toolsHostEl ? createPortal(toolsPanel, toolsHostEl) : toolsPanel)}
+
+      {/* Mobile: horizontal tool strip above canvas */}
+      {isMobile && mobileToolbar}
+      {mobileCalibrationSheet}
 
       {/* Mask picker overlay — phase: pickingMask */}
       {tracingPhase === 'pickingMask' && maskCandidatesResult && (
