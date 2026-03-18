@@ -2,12 +2,17 @@
  * Save / Load `.raiz` project files.
  * Serialises images (data-URLs, measurements, calibrations, ROIs) to JSON.
  * Embeddings tensors are NOT saved — only the embeddingsModelId flag.
+ *
+ * Version history:
+ *   v1 — Original format (calibration: { calibrationLine, pixelsPerUnit })
+ *   v2 — Current format  (calibration: { mode, corners, linePoints, realWidth,
+ *         realHeight, pixelsPerUnitX, pixelsPerUnitY, wasNormalized })
+ *         Added displayName field.
  */
 
-import type { LoadedImage } from '../types';
+import type { LoadedImage, ImageCalibration, DrawingLine, DrawingPoint } from '../types';
 
 // ── Serialisable subset of LoadedImage ───────────────────────────
-// `File` objects can't be serialised, so we store the essential metadata.
 interface SerialisedImage {
   id: string;
   fileName: string;
@@ -27,18 +32,31 @@ interface SerialisedImage {
   displayName?: string;
 }
 
+/** v1 calibration shape (for migration) */
+interface V1Calibration {
+  imageId: string;
+  calibrationLine?: {
+    points: DrawingPoint[];
+    pixelLength?: number;
+    realLength?: number;
+  };
+  pixelsPerUnit?: number;
+  timestamp: number;
+}
+
 interface ProjectFile {
-  version: 1;
+  version: number;
   createdAt: string;
   currentImageId: string | null;
   maxResolution: number | null;
   images: SerialisedImage[];
 }
 
-// Helpers
+const CURRENT_VERSION = 2;
+
+// ── Helpers ──────────────────────────────────────────────────────
 
 function rehydrateFile(s: SerialisedImage): File {
-  // Convert data-URL to Blob so we can build a real File
   const arr = s.dataUrl.split(',');
   const mime = arr[0].match(/:(.*?);/)?.[1] ?? s.fileType;
   const bstr = atob(arr[1]);
@@ -47,7 +65,57 @@ function rehydrateFile(s: SerialisedImage): File {
   return new File([u8], s.fileName, { type: mime });
 }
 
-// Public API
+/** Detect and convert a v1 calibration object to the current format. */
+function migrateCalibration(
+  raw: Record<string, unknown> | undefined,
+  imageId: string,
+): ImageCalibration | undefined {
+  if (!raw) return undefined;
+
+  // Already in v2+ format
+  if ('mode' in raw && 'pixelsPerUnitX' in raw) {
+    return raw as unknown as ImageCalibration;
+  }
+
+  // v1 format: { calibrationLine?, pixelsPerUnit?, timestamp }
+  const v1 = raw as unknown as V1Calibration;
+  const ppu = v1.pixelsPerUnit;
+  if (!ppu || ppu <= 0) return undefined;
+
+  const line = v1.calibrationLine;
+  const points = line?.points;
+  let linePoints: [DrawingPoint, DrawingPoint] | undefined;
+  let pixelLen = 0;
+  if (points && points.length >= 2) {
+    const p0 = points[0];
+    const p1 = points[points.length - 1];
+    linePoints = [p0, p1];
+    const dx = p1.x - p0.x;
+    const dy = p1.y - p0.y;
+    pixelLen = Math.sqrt(dx * dx + dy * dy);
+  }
+
+  const realLength = pixelLen > 0 ? pixelLen / ppu : 0;
+
+  return {
+    imageId,
+    mode: 'line',
+    linePoints,
+    realWidth: realLength,
+    realHeight: realLength,
+    pixelsPerUnitX: ppu,
+    pixelsPerUnitY: ppu,
+    wasNormalized: false,
+    timestamp: v1.timestamp ?? Date.now(),
+  };
+}
+
+/** Remove old `type: 'calibration'` entries from the measurements array. */
+function migrateMeasurements(measurements: DrawingLine[]): DrawingLine[] {
+  return measurements.filter((m) => m.type !== 'calibration');
+}
+
+// ── Public API ───────────────────────────────────────────────────
 
 export function saveProject(
   images: LoadedImage[],
@@ -74,7 +142,7 @@ export function saveProject(
   }));
 
   const project: ProjectFile = {
-    version: 1,
+    version: CURRENT_VERSION,
     createdAt: new Date().toISOString(),
     currentImageId,
     maxResolution,
@@ -84,7 +152,6 @@ export function saveProject(
   const json = JSON.stringify(project);
   const blob = new Blob([json], { type: 'application/json' });
 
-  // Trigger download
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -114,33 +181,45 @@ export async function loadProject(): Promise<LoadedProject | null> {
         const text = await file.text();
         const project: ProjectFile = JSON.parse(text);
 
-        if (project.version !== 1) {
+        if (!project.version || project.version > CURRENT_VERSION) {
           alert('Versión de archivo no compatible.');
           resolve(null);
           return;
         }
 
-        const images: LoadedImage[] = project.images.map((s) => ({
-          id: s.id,
-          file: rehydrateFile(s),
-          dataUrl: s.dataUrl,
-          width: s.width,
-          height: s.height,
-          measurements: s.measurements,
-          calibration: s.calibration,
-          timestamp: s.timestamp,
-          embeddingsModelId: s.embeddingsModelId,
-          samROI: s.samROI,
-          originalDataUrl: s.originalDataUrl,
-          originalWidth: s.originalWidth,
-          originalHeight: s.originalHeight,
-          displayName: s.displayName,
-        }));
+        const needsMigration = project.version < CURRENT_VERSION;
+
+        const images: LoadedImage[] = project.images.map((s) => {
+          const calibration = needsMigration
+            ? migrateCalibration(s.calibration as unknown as Record<string, unknown>, s.id)
+            : s.calibration;
+
+          const measurements = needsMigration
+            ? migrateMeasurements(s.measurements)
+            : s.measurements;
+
+          return {
+            id: s.id,
+            file: rehydrateFile(s),
+            dataUrl: s.dataUrl,
+            width: s.width,
+            height: s.height,
+            measurements,
+            calibration,
+            timestamp: s.timestamp,
+            embeddingsModelId: s.embeddingsModelId,
+            samROI: s.samROI,
+            originalDataUrl: s.originalDataUrl,
+            originalWidth: s.originalWidth,
+            originalHeight: s.originalHeight,
+            displayName: s.displayName,
+          };
+        });
 
         resolve({
           images,
           currentImageId: project.currentImageId,
-          maxResolution: project.maxResolution,
+          maxResolution: project.maxResolution ?? null,
         });
       } catch (err) {
         console.error('Error loading .raiz file:', err);
@@ -148,7 +227,6 @@ export async function loadProject(): Promise<LoadedProject | null> {
         resolve(null);
       }
     };
-    // If the user cancels the file picker
     input.oncancel = () => resolve(null);
     input.click();
   });
